@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'dalli'
 require 'legion/cache/pool'
 
@@ -5,7 +7,8 @@ module Legion
   module Cache
     module Memcached
       include Legion::Cache::Pool
-      extend self
+
+      module_function
 
       def client(servers: Legion::Settings[:cache][:servers], **opts)
         return @client unless @client.nil?

@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 RSpec.describe Legion::Cache::Pool do
   it { should be_a Module }
   it { should respond_to? :connected? }

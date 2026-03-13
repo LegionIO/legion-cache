@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'legion/cache/redis'
 
 RSpec.describe Legion::Cache::Redis do

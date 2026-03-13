@@ -1,25 +1,20 @@
-Legion::Cache
-=====
+# legion-cache
 
-Legion::Cache is a wrapper class to handle requests to the caching tier. It supports both memcached and redis
+Caching wrapper for the [LegionIO](https://github.com/LegionIO/LegionIO) framework. Provides a consistent interface for Memcached (via `dalli`) and Redis (via `redis` gem) with connection pooling. Driver selection is config-driven.
 
-Supported Ruby versions and implementations
-------------------------------------------------
-
-Legion::Json should work identically on:
-
-* JRuby 9.2+
-* Ruby 2.4+
-
-
-Installation and Usage
-------------------------
-
-You can verify your installation using this piece of code:
+## Installation
 
 ```bash
 gem install legion-cache
 ```
+
+Or add to your Gemfile:
+
+```ruby
+gem 'legion-cache'
+```
+
+## Usage
 
 ```ruby
 require 'legion/cache'
@@ -28,20 +23,14 @@ Legion::Cache.setup
 Legion::Cache.connected? # => true
 Legion::Cache.set('foobar', 'testing', ttl: 10)
 Legion::Cache.get('foobar') # => 'testing'
-sleep(11)
-Legion::Cache.get('foobar') # => nil
-
 ```
 
-Settings
-----------
+## Configuration
 
 ```json
 {
   "driver": "dalli",
-  "servers": [
-    "127.0.0.1:11211"
-  ],
+  "servers": ["127.0.0.1:11211"],
   "connected": false,
   "enabled": true,
   "namespace": "legion",
@@ -53,7 +42,13 @@ Settings
 }
 ```
 
-Authors
-----------
+Set `"driver": "redis"` and update `servers` to use Redis instead of Memcached.
 
-* [Matthew Iverson](https://github.com/Esity) - current maintainer
+## Requirements
+
+- Ruby >= 3.4
+- Memcached or Redis server
+
+## License
+
+Apache-2.0

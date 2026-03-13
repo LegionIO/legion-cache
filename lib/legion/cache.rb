@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'legion/cache/version'
 require 'legion/cache/settings'
 
@@ -13,10 +15,10 @@ module Legion
         include Legion::Cache::Memcached
       end
 
-      def setup(**opts)
+      def setup(**)
         return Legion::Settings[:cache][:connected] = true if connected?
 
-        return unless client(**Legion::Settings[:cache], **opts)
+        return unless client(**Legion::Settings[:cache], **)
 
         @connected = true
         Legion::Settings[:cache][:connected] = true

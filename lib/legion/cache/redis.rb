@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'redis'
 require 'legion/cache/pool'
 
@@ -5,7 +7,8 @@ module Legion
   module Cache
     module Redis
       include Legion::Cache::Pool
-      extend self
+
+      module_function
 
       def client(pool_size: 20, timeout: 5, **)
         return @client unless @client.nil?

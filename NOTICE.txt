@@ -1,9 +1,0 @@
-Legion::Cache(legion-cache)
-Copyright 2021 Optum
-
-Project Description:
-====================
-A Wrapper class for the LegionIO framework to interface with both Memcached and Redis for caching purposes
-
-Author(s):
-Esity
