@@ -7,8 +7,7 @@ module Legion
   module Cache
     module Memcached
       include Legion::Cache::Pool
-
-      module_function
+      extend self # rubocop:disable Style/ModuleFunction
 
       def client(servers: Legion::Settings[:cache][:servers], **opts)
         return @client unless @client.nil?

@@ -8,13 +8,13 @@ require 'legion/cache/redis'
 
 module Legion
   module Cache
-    class << self
-      if Legion::Settings[:cache][:driver] == 'redis'
-        include Legion::Cache::Redis
-      else
-        include Legion::Cache::Memcached
-      end
+    if Legion::Settings[:cache][:driver] == 'redis'
+      extend Legion::Cache::Redis
+    else
+      extend Legion::Cache::Memcached
+    end
 
+    class << self
       def setup(**)
         return Legion::Settings[:cache][:connected] = true if connected?
 

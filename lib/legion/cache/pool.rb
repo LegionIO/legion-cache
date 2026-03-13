@@ -5,6 +5,8 @@ require 'connection_pool'
 module Legion
   module Cache
     module Pool
+      extend self # rubocop:disable Style/ModuleFunction
+
       def connected?
         @connected ||= false
       end

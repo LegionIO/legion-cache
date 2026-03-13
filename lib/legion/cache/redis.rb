@@ -7,8 +7,7 @@ module Legion
   module Cache
     module Redis
       include Legion::Cache::Pool
-
-      module_function
+      extend self # rubocop:disable Style/ModuleFunction
 
       def client(pool_size: 20, timeout: 5, **)
         return @client unless @client.nil?
