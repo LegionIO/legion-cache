@@ -7,11 +7,12 @@ require 'simplecov'
 SimpleCov.start
 
 Legion::Logging.setup(log_file: './legion.log')
+
+require 'legion/cache/settings'
+require 'legion/cache/version'
+
 Legion::Settings.merge_settings('cache', Legion::Cache::Settings.default)
 Legion::Settings.load
-require 'legion/cache/settings'
-
-require 'legion/cache/version'
 
 RSpec.configure do |config|
   config.example_status_persistence_file_path = '.rspec_status'

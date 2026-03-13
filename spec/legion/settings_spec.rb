@@ -4,37 +4,87 @@ require 'spec_helper'
 require 'legion/cache/settings'
 
 RSpec.describe Legion::Cache::Settings do
-  subject(:default) { Legion::Cache::Settings.default }
-  it { should respond_to :default }
-  context 'default attributes' do
-    before { default.default }
-    it { should be_a Hash }
-    it { should include(enabled: true) }
-    it { should include(servers: ['127.0.0.1:11211']) }
-    it { should include(connected: false) }
-    it { should include(namespace: 'legion') }
+  describe '.default' do
+    subject(:defaults) { described_class.default }
+
+    it 'returns a hash' do
+      expect(defaults).to be_a(Hash)
+    end
+
+    it 'has a driver' do
+      expect(defaults[:driver]).to be_a(String)
+      expect(%w[dalli redis]).to include(defaults[:driver])
+    end
+
+    it 'has servers default' do
+      expect(defaults[:servers]).to eq(['127.0.0.1:11211'])
+    end
+
+    it 'has connected set to false' do
+      expect(defaults[:connected]).to eq(false)
+    end
+
+    it 'has enabled set to true' do
+      expect(defaults[:enabled]).to eq(true)
+    end
+
+    it 'has namespace of legion' do
+      expect(defaults[:namespace]).to eq('legion')
+    end
+
+    it 'has compress set to false' do
+      expect(defaults[:compress]).to eq(false)
+    end
+
+    it 'has pool_size of 10' do
+      expect(defaults[:pool_size]).to eq(10)
+    end
+
+    it 'has timeout of 5' do
+      expect(defaults[:timeout]).to eq(5)
+    end
+
+    it 'has expires_in of 0' do
+      expect(defaults[:expires_in]).to eq(0)
+    end
+
+    it 'has cache_nils set to false' do
+      expect(defaults[:cache_nils]).to eq(false)
+    end
+
+    it 'has failover set to true' do
+      expect(defaults[:failover]).to eq(true)
+    end
+
+    it 'has threadsafe set to true' do
+      expect(defaults[:threadsafe]).to eq(true)
+    end
+
+    it 'has serializer set to Legion::JSON' do
+      expect(defaults[:serializer]).to eq(Legion::JSON)
+    end
   end
 
-  context 'should have a driver' do
-    subject(:driver) { Legion::Cache::Settings.driver }
-    it { should be_a String }
-  end
+  describe '.driver' do
+    it 'returns a string' do
+      expect(described_class.driver).to be_a(String)
+    end
 
-  context 'should be able to override driver' do
-    subject(:driver) { Legion::Cache::Settings.driver('redis') }
-    it { should be_a String }
-    it { should eq 'redis' }
-  end
+    it 'defaults to dalli when available' do
+      expect(described_class.driver).to eq('dalli')
+    end
 
-  context 'should be able to override driver' do
-    subject(:driver) { Legion::Cache::Settings.driver('dalli') }
-    it { should be_a String }
-    it { should eq 'dalli' }
-  end
+    it 'accepts preferred driver' do
+      expect(described_class.driver('dalli')).to eq('dalli')
+    end
 
-  context 'should be able to default to dalli' do
-    subject(:driver) { Legion::Cache::Settings.driver('foobar') }
-    it { should be_a String }
-    it { should eq 'dalli' }
+    it 'returns redis when preferred' do
+      expect(described_class.driver('redis')).to eq('redis')
+    end
+
+    it 'falls back to secondary when primary not found' do
+      expect(described_class.driver('foobar')).to be_a(String)
+      expect(described_class.driver('foobar')).to eq('dalli')
+    end
   end
 end
