@@ -45,20 +45,24 @@ Legion::Cache (singleton module)
   "enabled": true,
   "namespace": "legion",
   "compress": false,
+  "failover": true,
+  "threadsafe": true,
   "cache_nils": false,
   "pool_size": 10,
-  "timeout": 10,
+  "timeout": 5,
   "expires_in": 0
 }
 ```
+
+The `driver` is auto-detected at load time: prefers `dalli`, falls back to `redis` if dalli is unavailable. Both gems are required dependencies so auto-detection is a fallback for unusual environments.
 
 ## Dependencies
 
 | Gem | Purpose |
 |-----|---------|
-| `dalli` (>= 2.7) | Memcached client |
-| `redis` (>= 4.2) | Redis client |
-| `connection_pool` (>= 2.2.3) | Thread-safe connection pooling |
+| `dalli` (>= 3.0) | Memcached client |
+| `redis` (>= 5.0) | Redis client |
+| `connection_pool` (>= 2.4) | Thread-safe connection pooling |
 | `legion-logging` | Logging |
 | `legion-settings` | Configuration |
 

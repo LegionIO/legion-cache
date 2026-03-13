@@ -35,14 +35,16 @@ Legion::Cache.get('foobar') # => 'testing'
   "enabled": true,
   "namespace": "legion",
   "compress": false,
+  "failover": true,
+  "threadsafe": true,
   "cache_nils": false,
   "pool_size": 10,
-  "timeout": 10,
+  "timeout": 5,
   "expires_in": 0
 }
 ```
 
-Set `"driver": "redis"` and update `servers` to use Redis instead of Memcached.
+The driver is auto-detected at startup: prefers `dalli` (Memcached) if available, falls back to `redis`. Override with `"driver": "redis"` and update `servers` to point at your Redis instance.
 
 ## Requirements
 
