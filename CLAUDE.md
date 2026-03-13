@@ -1,14 +1,13 @@
 # legion-cache: Caching Layer for LegionIO
 
 **Repository Level 3 Documentation**
-- **Category**: `/Users/miverso2/rubymine/arc/CLAUDE.md`
-- **Workspace**: `/Users/miverso2/rubymine/CLAUDE.md`
+- **Parent**: `/Users/miverso2/rubymine/legion/CLAUDE.md`
 
 ## Purpose
 
 Caching wrapper for the LegionIO framework. Provides a consistent interface for Memcached (via `dalli`) and Redis (via `redis` gem) with connection pooling. Driver selection is config-driven.
 
-**GitHub**: https://github.com/Optum/legion-cache
+**GitHub**: https://github.com/LegionIO/legion-cache
 **License**: Apache-2.0
 
 ## Architecture
