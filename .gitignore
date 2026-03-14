@@ -13,3 +13,6 @@
 # rspec failure tracking
 .rspec_status
 legionio.key
+# logs and OS artifacts
+legion.log
+.DS_Store

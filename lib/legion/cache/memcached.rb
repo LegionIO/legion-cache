@@ -25,19 +25,27 @@ module Legion
       end
 
       def get(key)
-        client.with { |conn| conn.get(key) }
+        result = client.with { |conn| conn.get(key) }
+        Legion::Logging.debug "[cache] GET #{key} hit=#{!result.nil?}"
+        result
       end
 
       def fetch(key, ttl = nil)
-        client.with { |conn| conn.fetch(key, ttl) }
+        result = client.with { |conn| conn.fetch(key, ttl) }
+        Legion::Logging.debug "[cache] FETCH #{key} hit=#{!result.nil?}"
+        result
       end
 
       def set(key, value, ttl = 180)
-        client.with { |conn| conn.set(key, value, ttl).positive? }
+        result = client.with { |conn| conn.set(key, value, ttl).positive? }
+        Legion::Logging.debug "[cache] SET #{key} ttl=#{ttl} success=#{result} value_class=#{value.class}"
+        result
       end
 
       def delete(key)
-        client.with { |conn| conn.delete(key) == true }
+        result = client.with { |conn| conn.delete(key) == true }
+        Legion::Logging.debug "[cache] DELETE #{key} success=#{result}"
+        result
       end
 
       def flush(delay = 0)
