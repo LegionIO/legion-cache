@@ -65,6 +65,38 @@ RSpec.describe Legion::Cache::Settings do
     end
   end
 
+  describe '.local' do
+    subject(:locals) { described_class.local }
+
+    it 'returns a Hash' do
+      expect(locals).to be_a(Hash)
+    end
+
+    it 'defaults enabled to true' do
+      expect(locals[:enabled]).to eq(true)
+    end
+
+    it 'defaults servers to localhost' do
+      expect(locals[:servers]).to eq(['127.0.0.1:11211'])
+    end
+
+    it 'defaults namespace to legion_local' do
+      expect(locals[:namespace]).to eq('legion_local')
+    end
+
+    it 'defaults pool_size to 5' do
+      expect(locals[:pool_size]).to eq(5)
+    end
+
+    it 'defaults timeout to 3' do
+      expect(locals[:timeout]).to eq(3)
+    end
+
+    it 'auto-detects driver independently' do
+      expect(locals[:driver]).to be_a(String)
+    end
+  end
+
   describe '.driver' do
     it 'returns a string' do
       expect(described_class.driver).to be_a(String)
