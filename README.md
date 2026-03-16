@@ -2,7 +2,7 @@
 
 Caching wrapper for the [LegionIO](https://github.com/LegionIO/LegionIO) framework. Provides a consistent interface for Memcached (via `dalli`) and Redis (via `redis` gem) with connection pooling. Driver selection is config-driven.
 
-**Version**: 1.2.1
+**Version**: 1.3.0
 
 ## Installation
 
@@ -40,6 +40,25 @@ Legion::Cache.flush            # flushdb
 Legion::Cache.shutdown
 ```
 
+## Two-Tier Cache
+
+Legion::Cache supports a two-tier architecture: a shared remote cluster and a local per-machine cache. If the shared cluster is unreachable at setup, all operations transparently fall back to local.
+
+```ruby
+# Shared cache connects to remote cluster; Local connects to localhost
+Legion::Cache.setup          # starts Local first, then tries shared
+Legion::Cache.using_local?   # => true if shared was unreachable
+Legion::Cache.local          # => Legion::Cache::Local
+
+# Use Local directly if needed
+Legion::Cache::Local.setup
+Legion::Cache::Local.set('key', 'value', 60)
+Legion::Cache::Local.get('key')  # => 'value'
+Legion::Cache::Local.shutdown
+```
+
+Local uses a separate namespace (`legion_local`) and independent connection pool (pool_size: 5, timeout: 3) so it never collides with the shared tier.
+
 ## Configuration
 
 ```json
@@ -65,6 +84,20 @@ The driver is auto-detected at load time: prefers `dalli` (Memcached) if availab
 
 - `value_max_bytes` defaults to **8MB**. Dalli enforces a 1MB client-side limit by default, which silently rejects large values. This default overrides that. Your Memcached server should also be started with `-I 8m` to match.
 - Redis default pool size is 20; Memcached default pool size is 10.
+
+### Local Cache Settings
+
+```json
+{
+  "driver": "dalli",
+  "servers": ["127.0.0.1:11211"],
+  "namespace": "legion_local",
+  "pool_size": 5,
+  "timeout": 3
+}
+```
+
+Override via `Legion::Settings[:cache_local]`.
 
 ## Pool API
 
