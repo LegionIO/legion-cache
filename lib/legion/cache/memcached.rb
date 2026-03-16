@@ -16,8 +16,11 @@ module Legion
         @timeout = opts.key?(:timeout) ? opts[:timeout] : Legion::Settings[:cache][:timeout] || 5
 
         Dalli.logger = Legion::Logging
+        cache_opts = Legion::Settings[:cache].merge(opts)
+        cache_opts[:value_max_bytes] ||= 8 * 1024 * 1024
+
         @client = ConnectionPool.new(size: pool_size, timeout: timeout) do
-          Dalli::Client.new(servers, Legion::Settings[:cache].merge(opts))
+          Dalli::Client.new(servers, cache_opts)
         end
 
         @connected = true
