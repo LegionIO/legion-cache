@@ -65,7 +65,8 @@ module Legion
         end
 
         def restart(**opts)
-          @driver&.restart(**opts)
+          settings = local_settings
+          @driver&.restart(**settings.merge(opts))
           @connected = true
         end
 

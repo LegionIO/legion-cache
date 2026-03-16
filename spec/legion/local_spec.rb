@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
+require 'legion/cache'
 require 'legion/cache/local'
 
 RSpec.describe Legion::Cache::Local do
@@ -76,5 +77,74 @@ RSpec.describe Legion::Cache::Local do
     it 'reports not connected' do
       expect(described_class.connected?).to eq false
     end
+  end
+end
+
+RSpec.describe 'Legion::Cache::Local integration' do
+  before(:all) do
+    Legion::Cache::Local.reset!
+    Legion::Cache::Local.setup
+  end
+
+  after(:all) do
+    Legion::Cache::Local.shutdown
+  end
+
+  it 'can setup and connect' do
+    expect(Legion::Cache::Local.connected?).to eq true
+  end
+
+  it 'can set and get' do
+    expect(Legion::Cache::Local.set('local_test', 'hello')).to eq true
+    expect(Legion::Cache::Local.get('local_test')).to eq 'hello'
+  end
+
+  it 'can set with TTL' do
+    expect(Legion::Cache::Local.set('local_ttl', 'expires', 10)).to eq true
+    expect(Legion::Cache::Local.get('local_ttl')).to eq 'expires'
+  end
+
+  it 'can delete' do
+    Legion::Cache::Local.set('local_del', 'gone')
+    expect(Legion::Cache::Local.delete('local_del')).to eq true
+    expect(Legion::Cache::Local.get('local_del')).to be_nil
+  end
+
+  it 'can flush' do
+    Legion::Cache::Local.set('local_flush', 'bye')
+    expect(Legion::Cache::Local.flush).to eq true
+  end
+
+  it 'can report size and available' do
+    expect(Legion::Cache::Local.size).to eq 5
+    expect(Legion::Cache::Local.available).to be_a(Integer)
+  end
+
+  it 'can report pool_size and timeout' do
+    expect(Legion::Cache::Local.pool_size).to eq 5
+    expect(Legion::Cache::Local.timeout).to eq 3
+  end
+
+  it 'can shutdown and reconnect' do
+    Legion::Cache::Local.shutdown
+    expect(Legion::Cache::Local.connected?).to eq false
+    Legion::Cache::Local.setup
+    expect(Legion::Cache::Local.connected?).to eq true
+  end
+
+  it 'can restart with new values' do
+    Legion::Cache::Local.restart(pool_size: 2, timeout: 1)
+    expect(Legion::Cache::Local.connected?).to eq true
+    expect(Legion::Cache::Local.set('restart_test', 'works')).to eq true
+    expect(Legion::Cache::Local.get('restart_test')).to eq 'works'
+  end
+
+  it 'uses separate namespace from shared cache' do
+    Legion::Cache::Local.set('ns_test', 'local_value')
+    Legion::Cache.setup
+    Legion::Cache.set('ns_test', 'shared_value')
+    expect(Legion::Cache::Local.get('ns_test')).to eq 'local_value'
+    expect(Legion::Cache.get('ns_test')).to eq 'shared_value'
+    Legion::Cache.shutdown
   end
 end
