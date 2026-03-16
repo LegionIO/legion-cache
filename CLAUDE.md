@@ -14,26 +14,35 @@ Caching wrapper for the LegionIO framework. Provides a consistent interface for 
 
 ```
 Legion::Cache (singleton module)
-├── .setup(**opts)     # Connect to cache backend
-├── .get(key)          # Retrieve cached value
-├── .set(key, value, ttl:)  # Store value with optional TTL
-├── .connected?        # Connection status
-├── .shutdown          # Close connections
+├── .setup(**opts)          # Connect to cache backend
+├── .get(key)               # Retrieve cached value
+├── .fetch(key, ttl)        # Get with block/TTL support (Memcached only; alias for get on Redis)
+├── .set(key, value, ttl)   # Store value with optional TTL (positional on Memcached, keyword on Redis)
+├── .delete(key)            # Remove a key
+├── .flush                  # Flush all keys (flush(delay) on Memcached, flushdb on Redis)
+├── .connected?             # Connection status
+├── .size                   # Total pool connections
+├── .available              # Idle pool connections
+├── .restart(**opts)        # Close and reconnect pool with optional new opts
+├── .shutdown               # Close connections, mark disconnected
 │
-├── Memcached          # Dalli-based Memcached driver (default)
+├── Memcached               # Dalli-based Memcached driver (default)
 │   └── Uses connection_pool for thread safety
-├── Redis              # Redis driver
+│   └── value_max_bytes defaults to 8MB (overrides dalli's 1MB client-side limit)
+├── Redis                   # Redis driver
 │   └── Uses connection_pool for thread safety
-├── Pool               # Connection pool management
-├── Settings           # Default cache config
+│   └── Default pool_size is 20 (Memcached default is 10)
+├── Pool                    # Connection pool management (connected?, size, available, close, restart)
+├── Settings                # Default cache config + driver auto-detection
 └── Version
 ```
 
 ### Key Design Patterns
 
-- **Driver Selection at Load Time**: `Legion::Settings[:cache][:driver]` determines which module gets `include`d into `Legion::Cache` (`'redis'` or `'dalli'`)
+- **Driver Selection at Load Time**: `Legion::Settings[:cache][:driver]` determines which module gets `extend`ed into `Legion::Cache` (`'redis'` or `'dalli'`)
 - **Connection Pooling**: Both drivers use `connection_pool` gem for thread-safe access
-- **Unified Interface**: Same `get`/`set`/`connected?`/`shutdown` methods regardless of backend
+- **Unified Interface**: Same `get`/`set`/`delete`/`flush`/`connected?`/`shutdown` methods regardless of backend
+- **TTL Signature Difference**: Memcached `set(key, value, ttl)` uses a positional TTL (default 180s); Redis `set(key, value, ttl: nil)` uses a keyword TTL
 
 ## Default Settings
 
@@ -50,11 +59,16 @@ Legion::Cache (singleton module)
   "cache_nils": false,
   "pool_size": 10,
   "timeout": 5,
-  "expires_in": 0
+  "expires_in": 0,
+  "serializer": "Legion::JSON"
 }
 ```
 
 The `driver` is auto-detected at load time: prefers `dalli`, falls back to `redis` if dalli is unavailable. Both gems are required dependencies so auto-detection is a fallback for unusual environments.
+
+### Memcached value_max_bytes
+
+Dalli enforces a 1MB client-side limit by default (`value_max_bytes: 1_048_576`). The Memcached driver overrides this to **8MB** (`8 * 1024 * 1024`) unless explicitly set. This prevents silent rejection of large cached values. The Memcached server must also be started with `-I 8m` to accept values up to 8MB server-side.
 
 ## Dependencies
 
