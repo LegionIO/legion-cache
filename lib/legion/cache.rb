@@ -5,6 +5,7 @@ require 'legion/cache/settings'
 
 require 'legion/cache/memcached'
 require 'legion/cache/redis'
+require 'legion/cache/local'
 
 module Legion
   module Cache
@@ -18,16 +19,82 @@ module Legion
       def setup(**)
         return Legion::Settings[:cache][:connected] = true if connected?
 
-        return unless client(**Legion::Settings[:cache], **)
-
-        @connected = true
-        Legion::Settings[:cache][:connected] = true
+        setup_local
+        setup_shared(**)
       end
 
       def shutdown
         Legion::Logging.info 'Shutting down Legion::Cache'
-        close
+        close unless @using_local
+        Legion::Cache::Local.shutdown if Legion::Cache::Local.connected?
+        @using_local = false
+        @connected = false
         Legion::Settings[:cache][:connected] = false
+      end
+
+      def local
+        Legion::Cache::Local
+      end
+
+      def using_local?
+        @using_local == true
+      end
+
+      def get(key)
+        return Legion::Cache::Local.get(key) if @using_local
+
+        super
+      end
+
+      def set(key, value, ttl = 180)
+        return Legion::Cache::Local.set(key, value, ttl) if @using_local
+
+        super
+      end
+
+      def fetch(key, ttl = nil)
+        return Legion::Cache::Local.fetch(key, ttl) if @using_local
+
+        super
+      end
+
+      def delete(key)
+        return Legion::Cache::Local.delete(key) if @using_local
+
+        super
+      end
+
+      def flush(delay = 0)
+        return Legion::Cache::Local.flush(delay) if @using_local
+
+        super
+      end
+
+      private
+
+      def setup_local
+        return if Legion::Cache::Local.connected?
+
+        Legion::Cache::Local.setup
+      rescue StandardError => e
+        Legion::Logging.warn "Local cache setup failed: #{e.message}" if defined?(Legion::Logging)
+      end
+
+      def setup_shared(**)
+        client(**Legion::Settings[:cache], **)
+        @connected = true
+        @using_local = false
+        Legion::Settings[:cache][:connected] = true
+      rescue StandardError => e
+        Legion::Logging.warn "Shared cache unavailable (#{e.message}), falling back to Local" if defined?(Legion::Logging)
+        if Legion::Cache::Local.connected?
+          @using_local = true
+          @connected = true
+          Legion::Settings[:cache][:connected] = true
+        else
+          @connected = false
+          Legion::Settings[:cache][:connected] = false
+        end
       end
     end
   end
