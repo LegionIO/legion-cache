@@ -9,6 +9,7 @@ jobs:
     uses: LegionIO/.github/.github/workflows/ci.yml@main
     with:
       needs-redis: true
+      needs-memcached: true
 
   release:
     needs: ci
