@@ -8,6 +8,7 @@
 Caching wrapper for the LegionIO framework. Provides a consistent interface for Memcached (via `dalli`) and Redis (via `redis` gem) with connection pooling. Driver selection is config-driven.
 
 **GitHub**: https://github.com/LegionIO/legion-cache
+**Version**: 1.3.0
 **License**: Apache-2.0
 
 ## Architecture
