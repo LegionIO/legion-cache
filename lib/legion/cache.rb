@@ -9,7 +9,7 @@ require 'legion/cache/local'
 
 module Legion
   module Cache
-    if Legion::Settings[:cache][:driver] == 'redis'
+    if Legion::Cache::Settings.normalize_driver(Legion::Settings[:cache][:driver]) == 'redis'
       extend Legion::Cache::Redis
     else
       extend Legion::Cache::Memcached
