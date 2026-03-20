@@ -118,6 +118,64 @@ RSpec.describe Legion::Cache::Settings do
     end
   end
 
+  describe '.resolve_servers' do
+    it 'returns default localhost with memcached port when no servers given' do
+      result = described_class.resolve_servers(driver: 'memcached')
+      expect(result).to eq(['127.0.0.1:11211'])
+    end
+
+    it 'returns default localhost with redis port when no servers given' do
+      result = described_class.resolve_servers(driver: 'redis')
+      expect(result).to eq(['127.0.0.1:6379'])
+    end
+
+    it 'accepts a singular server string' do
+      result = described_class.resolve_servers(driver: 'memcached', server: '10.0.0.5')
+      expect(result).to eq(['10.0.0.5:11211'])
+    end
+
+    it 'accepts a servers array' do
+      result = described_class.resolve_servers(driver: 'redis', servers: ['10.0.0.5', '10.0.0.6'])
+      expect(result).to eq(['10.0.0.5:6379', '10.0.0.6:6379'])
+    end
+
+    it 'merges singular and plural together' do
+      result = described_class.resolve_servers(
+        driver: 'memcached', server: '10.0.0.5', servers: ['10.0.0.6']
+      )
+      expect(result).to contain_exactly('10.0.0.6:11211', '10.0.0.5:11211')
+    end
+
+    it 'preserves explicit ports' do
+      result = described_class.resolve_servers(driver: 'memcached', servers: ['10.0.0.5:9999'])
+      expect(result).to eq(['10.0.0.5:9999'])
+    end
+
+    it 'injects default port only where missing' do
+      result = described_class.resolve_servers(
+        driver: 'redis', servers: ['10.0.0.5:9999', '10.0.0.6']
+      )
+      expect(result).to eq(['10.0.0.5:9999', '10.0.0.6:6379'])
+    end
+
+    it 'deduplicates entries' do
+      result = described_class.resolve_servers(
+        driver: 'memcached', server: '10.0.0.5', servers: ['10.0.0.5']
+      )
+      expect(result).to eq(['10.0.0.5:11211'])
+    end
+
+    it 'allows port override' do
+      result = described_class.resolve_servers(driver: 'memcached', servers: ['10.0.0.5'], port: 22_122)
+      expect(result).to eq(['10.0.0.5:22122'])
+    end
+
+    it 'handles dalli as memcached' do
+      result = described_class.resolve_servers(driver: 'dalli')
+      expect(result).to eq(['127.0.0.1:11211'])
+    end
+  end
+
   describe '.driver' do
     it 'returns a string' do
       expect(described_class.driver).to be_a(String)
