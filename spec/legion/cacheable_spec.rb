@@ -228,7 +228,7 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
 
         extend Legion::Cache::Cacheable
 
-        def get_thing(id:, token: nil, **)
+        def get_thing(id:, token: nil, **) # rubocop:disable Lint/UnusedMethodArgument
           { id: id, t: Time.now.utc.to_f }
         end
 
@@ -250,5 +250,15 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
       expect(test_module.cached_methods).to have_key(:fetch_data)
       expect(test_module.cached_methods[:fetch_data][:ttl]).to eq(60)
     end
+  end
+end
+
+RSpec.describe 'Cacheable autoload' do
+  it 'is accessible after requiring legion/cache' do
+    require 'legion/cache'
+    expect(Legion::Cache::Cacheable).to be_a(Module)
+    expect(Legion::Cache::Cacheable).to respond_to(:cache_read)
+    expect(Legion::Cache::Cacheable).to respond_to(:build_cache_key)
+    expect(Legion::Cache::Cacheable).to respond_to(:memory_clear!)
   end
 end

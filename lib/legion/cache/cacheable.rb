@@ -6,11 +6,11 @@ module Legion
   module Cache
     module Cacheable
       def self.extended(base)
-        base.instance_variable_set(:@_cached_methods, {})
+        base.instance_variable_set(:@cached_methods, {})
       end
 
       def cached_methods
-        @_cached_methods ||= {}
+        @cached_methods ||= {}
       end
 
       def cache_method(method_name, ttl:, scope: :local, exclude_from_key: [])
@@ -41,7 +41,7 @@ module Legion
       end
 
       def self.build_cache_key(mod_name, method_name, exclude:, **kwargs)
-        filtered = kwargs.reject { |k, _| exclude.include?(k) }
+        filtered = kwargs.except(*exclude)
         args_hash = Digest::MD5.hexdigest(filtered.sort.to_s)
         "#{mod_name}.#{method_name}.#{args_hash}"
       end

@@ -2,6 +2,7 @@
 
 require 'legion/cache/version'
 require 'legion/cache/settings'
+require 'legion/cache/cacheable'
 
 require 'legion/cache/memcached'
 require 'legion/cache/redis'
