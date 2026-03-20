@@ -14,7 +14,7 @@ module Legion
       def self.default
         {
           driver:     driver,
-          servers:    ['127.0.0.1:11211'],
+          servers:    resolve_servers(driver: driver),
           connected:  false,
           enabled:    true,
           namespace:  'legion',
@@ -32,7 +32,7 @@ module Legion
       def self.local
         {
           driver:     driver,
-          servers:    ['127.0.0.1:11211'],
+          servers:    resolve_servers(driver: driver),
           connected:  false,
           enabled:    true,
           namespace:  'legion_local',
