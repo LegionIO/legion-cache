@@ -55,6 +55,14 @@ RSpec.describe Legion::Cache::Memcached do
     expect(@cache.flush).to eq true
   end
 
+  it 'accepts singular server parameter' do
+    @cache.close if @cache.connected?
+    @cache.instance_variable_set(:@client, nil)
+    @cache.instance_variable_set(:@connected, false)
+    expect { @cache.client(server: '127.0.0.1') }.not_to raise_error
+    expect(@cache.connected?).to eq true
+  end
+
   it 'wont use bogus methods' do
     expect(@cache).not_to respond_to :this_is_fake
   end

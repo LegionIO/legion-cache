@@ -16,8 +16,9 @@ RSpec.describe Legion::Cache::Settings do
       expect(%w[dalli redis]).to include(defaults[:driver])
     end
 
-    it 'has servers default' do
-      expect(defaults[:servers]).to eq(['127.0.0.1:11211'])
+    it 'has servers default matching driver port' do
+      expected_port = defaults[:driver] == 'redis' ? 6379 : 11_211
+      expect(defaults[:servers]).to eq(["127.0.0.1:#{expected_port}"])
     end
 
     it 'has connected set to false' do
@@ -76,8 +77,9 @@ RSpec.describe Legion::Cache::Settings do
       expect(locals[:enabled]).to eq(true)
     end
 
-    it 'defaults servers to localhost' do
-      expect(locals[:servers]).to eq(['127.0.0.1:11211'])
+    it 'defaults servers to localhost with driver-appropriate port' do
+      expected_port = locals[:driver] == 'redis' ? 6379 : 11_211
+      expect(locals[:servers]).to eq(["127.0.0.1:#{expected_port}"])
     end
 
     it 'defaults namespace to legion_local' do
@@ -94,6 +96,85 @@ RSpec.describe Legion::Cache::Settings do
 
     it 'auto-detects driver independently' do
       expect(locals[:driver]).to be_a(String)
+    end
+  end
+
+  describe '.normalize_driver' do
+    it 'maps redis to redis' do
+      expect(described_class.normalize_driver('redis')).to eq('redis')
+      expect(described_class.normalize_driver(:redis)).to eq('redis')
+    end
+
+    it 'maps memcached to dalli' do
+      expect(described_class.normalize_driver('memcached')).to eq('dalli')
+      expect(described_class.normalize_driver(:memcached)).to eq('dalli')
+    end
+
+    it 'maps dalli to dalli for backwards compatibility' do
+      expect(described_class.normalize_driver('dalli')).to eq('dalli')
+      expect(described_class.normalize_driver(:dalli)).to eq('dalli')
+    end
+
+    it 'passes through unknown drivers as strings' do
+      expect(described_class.normalize_driver('custom')).to eq('custom')
+    end
+  end
+
+  describe '.resolve_servers' do
+    it 'returns default localhost with memcached port when no servers given' do
+      result = described_class.resolve_servers(driver: 'memcached')
+      expect(result).to eq(['127.0.0.1:11211'])
+    end
+
+    it 'returns default localhost with redis port when no servers given' do
+      result = described_class.resolve_servers(driver: 'redis')
+      expect(result).to eq(['127.0.0.1:6379'])
+    end
+
+    it 'accepts a singular server string' do
+      result = described_class.resolve_servers(driver: 'memcached', server: '10.0.0.5')
+      expect(result).to eq(['10.0.0.5:11211'])
+    end
+
+    it 'accepts a servers array' do
+      result = described_class.resolve_servers(driver: 'redis', servers: ['10.0.0.5', '10.0.0.6'])
+      expect(result).to eq(['10.0.0.5:6379', '10.0.0.6:6379'])
+    end
+
+    it 'merges singular and plural together' do
+      result = described_class.resolve_servers(
+        driver: 'memcached', server: '10.0.0.5', servers: ['10.0.0.6']
+      )
+      expect(result).to contain_exactly('10.0.0.6:11211', '10.0.0.5:11211')
+    end
+
+    it 'preserves explicit ports' do
+      result = described_class.resolve_servers(driver: 'memcached', servers: ['10.0.0.5:9999'])
+      expect(result).to eq(['10.0.0.5:9999'])
+    end
+
+    it 'injects default port only where missing' do
+      result = described_class.resolve_servers(
+        driver: 'redis', servers: ['10.0.0.5:9999', '10.0.0.6']
+      )
+      expect(result).to eq(['10.0.0.5:9999', '10.0.0.6:6379'])
+    end
+
+    it 'deduplicates entries' do
+      result = described_class.resolve_servers(
+        driver: 'memcached', server: '10.0.0.5', servers: ['10.0.0.5']
+      )
+      expect(result).to eq(['10.0.0.5:11211'])
+    end
+
+    it 'allows port override' do
+      result = described_class.resolve_servers(driver: 'memcached', servers: ['10.0.0.5'], port: 22_122)
+      expect(result).to eq(['10.0.0.5:22122'])
+    end
+
+    it 'handles dalli as memcached' do
+      result = described_class.resolve_servers(driver: 'dalli')
+      expect(result).to eq(['127.0.0.1:11211'])
     end
   end
 

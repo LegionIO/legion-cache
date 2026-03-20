@@ -14,7 +14,7 @@ module Legion
       def self.default
         {
           driver:     driver,
-          servers:    ['127.0.0.1:11211'],
+          servers:    resolve_servers(driver: driver),
           connected:  false,
           enabled:    true,
           namespace:  'legion',
@@ -32,7 +32,7 @@ module Legion
       def self.local
         {
           driver:     driver,
-          servers:    ['127.0.0.1:11211'],
+          servers:    resolve_servers(driver: driver),
           connected:  false,
           enabled:    true,
           namespace:  'legion_local',
@@ -45,6 +45,27 @@ module Legion
           timeout:    3,
           serializer: Legion::JSON
         }
+      end
+
+      DEFAULT_PORTS = { 'dalli' => 11_211, 'redis' => 6379 }.freeze
+
+      def self.resolve_servers(driver:, server: nil, servers: [], port: nil)
+        gem_driver = normalize_driver(driver)
+        port ||= DEFAULT_PORTS.fetch(gem_driver, 11_211)
+
+        all = Array(servers) + Array(server)
+        all = ["127.0.0.1:#{port}"] if all.empty?
+
+        all.map! { |s| s.include?(':') ? s : "#{s}:#{port}" }
+        all.uniq
+      end
+
+      def self.normalize_driver(name)
+        case name.to_s
+        when 'redis' then 'redis'
+        when 'memcached', 'dalli' then 'dalli'
+        else name.to_s
+        end
       end
 
       def self.driver(prefer = 'dalli')

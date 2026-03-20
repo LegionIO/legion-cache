@@ -9,18 +9,25 @@ module Legion
       include Legion::Cache::Pool
       extend self # rubocop:disable Style/ModuleFunction
 
-      def client(servers: Legion::Settings[:cache][:servers], **opts)
+      def client(server: nil, servers: nil, **opts)
         return @client unless @client.nil?
 
-        @pool_size = opts.key?(:pool_size) ? opts[:pool_size] : Legion::Settings[:cache][:pool_size] || 10
-        @timeout = opts.key?(:timeout) ? opts[:timeout] : Legion::Settings[:cache][:timeout] || 5
+        settings = defined?(Legion::Settings) ? Legion::Settings[:cache] : {}
+        servers ||= settings[:servers] || []
+
+        @pool_size = opts.key?(:pool_size) ? opts[:pool_size] : settings[:pool_size] || 10
+        @timeout = opts.key?(:timeout) ? opts[:timeout] : settings[:timeout] || 5
+
+        resolved = Legion::Cache::Settings.resolve_servers(
+          driver: 'memcached', server: server, servers: Array(servers)
+        )
 
         Dalli.logger = Legion::Logging
-        cache_opts = Legion::Settings[:cache].merge(opts)
+        cache_opts = settings.merge(opts)
         cache_opts[:value_max_bytes] ||= 8 * 1024 * 1024
 
         @client = ConnectionPool.new(size: pool_size, timeout: timeout) do
-          Dalli::Client.new(servers, cache_opts)
+          Dalli::Client.new(resolved, cache_opts)
         end
 
         @connected = true

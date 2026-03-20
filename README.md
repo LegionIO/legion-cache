@@ -2,7 +2,7 @@
 
 Caching wrapper for the [LegionIO](https://github.com/LegionIO/LegionIO) framework. Provides a consistent interface for Memcached (via `dalli`) and Redis (via `redis` gem) with connection pooling. Driver selection is config-driven.
 
-**Version**: 1.3.0
+**Version**: 1.3.1
 
 ## Installation
 
@@ -79,6 +79,24 @@ Local uses a separate namespace (`legion_local`) and independent connection pool
 ```
 
 The driver is auto-detected at load time: prefers `dalli` (Memcached) if available, falls back to `redis`. Override with `"driver": "redis"` and update `servers` to point at your Redis instance.
+
+### Driver Names
+
+Supported driver names: `memcached` (or `dalli`), `redis`. All names are normalized internally — `"memcached"` and `"dalli"` are equivalent.
+
+### Server Resolution
+
+Both `server` (singular string) and `servers` (array) are accepted and merged. Default ports are injected per driver when omitted: 11211 for memcached, 6379 for redis. Duplicates are removed.
+
+```json
+{
+  "cache": {
+    "driver": "memcached",
+    "server": "10.0.0.5",
+    "servers": ["10.0.0.6", "10.0.0.7:22122"]
+  }
+}
+```
 
 ### Memcached notes
 
