@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.3.1] - 2026-03-20
+
+### Added
+- `Settings.normalize_driver` — maps `:memcached`, `:dalli`, `:redis` to internal gem names
+- `Settings.resolve_servers` — merges `server:` (string) and `servers:` (array), injects default port per driver (memcached: 11211, redis: 6379), deduplicates
+- `Settings::DEFAULT_PORTS` constant for driver default ports
+
+### Fixed
+- Redis driver now uses configured `server:`/`servers:` instead of hardcoded localhost
+- Memcached driver accepts `server:` (singular) in addition to `servers:` (plural)
+
+### Changed
+- `Settings.default` and `Settings.local` use `resolve_servers` for driver-aware server defaults
+- Driver selection in `cache.rb` and `local.rb` uses `normalize_driver` for consistent name handling
+
 ## [1.3.0] - 2026-03-16
 
 ### Added
