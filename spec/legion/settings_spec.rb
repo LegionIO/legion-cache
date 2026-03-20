@@ -97,6 +97,27 @@ RSpec.describe Legion::Cache::Settings do
     end
   end
 
+  describe '.normalize_driver' do
+    it 'maps redis to redis' do
+      expect(described_class.normalize_driver('redis')).to eq('redis')
+      expect(described_class.normalize_driver(:redis)).to eq('redis')
+    end
+
+    it 'maps memcached to dalli' do
+      expect(described_class.normalize_driver('memcached')).to eq('dalli')
+      expect(described_class.normalize_driver(:memcached)).to eq('dalli')
+    end
+
+    it 'maps dalli to dalli for backwards compatibility' do
+      expect(described_class.normalize_driver('dalli')).to eq('dalli')
+      expect(described_class.normalize_driver(:dalli)).to eq('dalli')
+    end
+
+    it 'passes through unknown drivers as strings' do
+      expect(described_class.normalize_driver('custom')).to eq('custom')
+    end
+  end
+
   describe '.driver' do
     it 'returns a string' do
       expect(described_class.driver).to be_a(String)

@@ -47,6 +47,14 @@ module Legion
         }
       end
 
+      def self.normalize_driver(name)
+        case name.to_s
+        when 'redis' then 'redis'
+        when 'memcached', 'dalli' then 'dalli'
+        else name.to_s
+        end
+      end
+
       def self.driver(prefer = 'dalli')
         secondary = prefer == 'dalli' ? 'redis' : 'dalli'
         if Gem::Specification.find_all_by_name(prefer).any?
