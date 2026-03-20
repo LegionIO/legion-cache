@@ -5,6 +5,41 @@ require 'digest'
 module Legion
   module Cache
     module Cacheable
+      def self.extended(base)
+        base.instance_variable_set(:@_cached_methods, {})
+      end
+
+      def cached_methods
+        @_cached_methods ||= {}
+      end
+
+      def cache_method(method_name, ttl:, scope: :local, exclude_from_key: [])
+        exclude_from_key |= %i[token bypass_local_method_cache]
+        cached_methods[method_name] = { ttl: ttl, scope: scope, exclude_from_key: exclude_from_key }
+
+        mod_name = name || 'Anonymous'
+        config = cached_methods[method_name]
+
+        wrapper = Module.new do
+          define_method(method_name) do |bypass_local_method_cache: false, **kwargs|
+            key = Legion::Cache::Cacheable.build_cache_key(
+              mod_name, method_name, exclude: config[:exclude_from_key], **kwargs
+            )
+
+            unless bypass_local_method_cache
+              cached = Legion::Cache::Cacheable.cache_read(key, scope: config[:scope])
+              return cached unless cached.nil?
+            end
+
+            result = super(**kwargs)
+            Legion::Cache::Cacheable.cache_write(key, result, ttl: config[:ttl], scope: config[:scope])
+            result
+          end
+        end
+
+        prepend wrapper
+      end
+
       def self.build_cache_key(mod_name, method_name, exclude:, **kwargs)
         filtered = kwargs.reject { |k, _| exclude.include?(k) }
         args_hash = Digest::MD5.hexdigest(filtered.sort.to_s)
@@ -44,7 +79,7 @@ module Legion
       end
 
       def self.local_cache_available?
-        defined?(Legion::Cache::Local) && Legion::Cache::Local.respond_to?(:get)
+        defined?(Legion::Cache::Local) && Legion::Cache::Local.respond_to?(:connected?) && Legion::Cache::Local.connected?
       end
 
       def self.local_cache_read(key)

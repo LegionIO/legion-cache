@@ -140,3 +140,115 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
     end
   end
 end
+
+RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
+  before { Legion::Cache::Cacheable.memory_clear! }
+
+  let(:test_module) do
+    Module.new do
+      def self.name
+        'TestRunner'
+      end
+
+      extend Legion::Cache::Cacheable
+
+      def fetch_data(user_id: 'me', **)
+        { user_id: user_id, fetched_at: Time.now.utc.to_f }
+      end
+
+      cache_method :fetch_data, ttl: 60
+    end
+  end
+
+  let(:instance) { Object.new.extend(test_module) }
+
+  describe 'caching behavior' do
+    it 'returns cached result on second call' do
+      first = instance.fetch_data(user_id: 'alice')
+      second = instance.fetch_data(user_id: 'alice')
+      expect(second[:fetched_at]).to eq(first[:fetched_at])
+    end
+
+    it 'caches separately for different args' do
+      alice = instance.fetch_data(user_id: 'alice')
+      bob = instance.fetch_data(user_id: 'bob')
+      expect(alice[:user_id]).to eq('alice')
+      expect(bob[:user_id]).to eq('bob')
+      expect(alice[:fetched_at]).not_to eq(bob[:fetched_at])
+    end
+
+    it 'does not cache across different method calls' do
+      mod = Module.new do
+        def self.name
+          'MultiMethod'
+        end
+
+        extend Legion::Cache::Cacheable
+
+        def method_a(**)
+          { method: :a, t: Time.now.utc.to_f }
+        end
+
+        def method_b(**)
+          { method: :b, t: Time.now.utc.to_f }
+        end
+
+        cache_method :method_a, ttl: 60
+        cache_method :method_b, ttl: 60
+      end
+      obj = Object.new.extend(mod)
+      a = obj.method_a
+      b = obj.method_b
+      expect(a[:method]).to eq(:a)
+      expect(b[:method]).to eq(:b)
+    end
+  end
+
+  describe 'bypass_local_method_cache' do
+    it 'skips cache read and refreshes on bypass' do
+      first = instance.fetch_data(user_id: 'me')
+      bypassed = instance.fetch_data(user_id: 'me', bypass_local_method_cache: true)
+      expect(bypassed[:fetched_at]).not_to eq(first[:fetched_at])
+    end
+
+    it 'writes result back to cache after bypass' do
+      instance.fetch_data(user_id: 'me')
+      bypassed = instance.fetch_data(user_id: 'me', bypass_local_method_cache: true)
+      cached = instance.fetch_data(user_id: 'me')
+      expect(cached[:fetched_at]).to eq(bypassed[:fetched_at])
+    end
+  end
+
+  describe 'exclude_from_key' do
+    let(:token_module) do
+      Module.new do
+        def self.name
+          'TokenRunner'
+        end
+
+        extend Legion::Cache::Cacheable
+
+        def get_thing(id:, token: nil, **)
+          { id: id, t: Time.now.utc.to_f }
+        end
+
+        cache_method :get_thing, ttl: 60, exclude_from_key: [:token]
+      end
+    end
+
+    let(:token_instance) { Object.new.extend(token_module) }
+
+    it 'ignores excluded args when building cache key' do
+      first = token_instance.get_thing(id: 1, token: 'abc')
+      second = token_instance.get_thing(id: 1, token: 'xyz')
+      expect(second[:t]).to eq(first[:t])
+    end
+  end
+
+  describe 'cached_methods registry' do
+    it 'tracks declared cached methods' do
+      expect(test_module.cached_methods).to have_key(:fetch_data)
+      expect(test_module.cached_methods[:fetch_data][:ttl]).to eq(60)
+    end
+  end
+end
