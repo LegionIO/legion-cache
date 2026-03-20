@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.3.2] - 2026-03-20
+
+### Added
+- `Legion::Cache::Cacheable` module for transparent method-level caching
+- `cache_method` DSL: declare cached methods with TTL, scope, and key exclusions
+- `build_cache_key`: deterministic MD5-based cache keys from module path + method + filtered args
+- `bypass_local_method_cache:` kwarg for force-refresh on cached methods
+- In-memory fallback store with TTL expiry when no cache backend is available
+- `memory_clear!` class method for test isolation
+
 ## [1.3.1] - 2026-03-20
 
 ### Added

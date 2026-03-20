@@ -2,7 +2,7 @@
 
 Caching wrapper for the [LegionIO](https://github.com/LegionIO/LegionIO) framework. Provides a consistent interface for Memcached (via `dalli`) and Redis (via `redis` gem) with connection pooling. Driver selection is config-driven.
 
-**Version**: 1.3.1
+**Version**: 1.3.2
 
 ## Installation
 
@@ -116,6 +116,33 @@ Both `server` (singular string) and `servers` (array) are accepted and merged. D
 ```
 
 Override via `Legion::Settings[:cache_local]`.
+
+## Method Caching
+
+Runner modules can use `cache_method` to transparently cache method results with TTL:
+
+```ruby
+module Runners::Presence
+  extend Legion::Cache::Cacheable
+
+  cache_method :get_presence, ttl: 300, exclude_from_key: [:token]
+
+  def get_presence(user_id: 'me', **)
+    conn = graph_connection(**)
+    response = conn.get("#{user_path(user_id)}/presence")
+    { availability: response.body['availability'], activity: response.body['activity'] }
+  end
+end
+```
+
+Every caller of `get_presence` gets cached results for 5 minutes. Use `bypass_local_method_cache: true` to force-refresh:
+
+```ruby
+runner.get_presence(user_id: 'me')                                    # cached
+runner.get_presence(user_id: 'me', bypass_local_method_cache: true)   # fresh
+```
+
+Options: `ttl:` (seconds), `scope:` (`:local` or `:global`), `exclude_from_key:` (args to ignore in cache key). Falls back to in-memory store when no cache backend is available.
 
 ## Pool API
 
