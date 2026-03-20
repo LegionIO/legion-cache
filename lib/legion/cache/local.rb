@@ -94,7 +94,7 @@ module Legion
         private
 
         def build_driver(driver_name)
-          case driver_name
+          case Legion::Cache::Settings.normalize_driver(driver_name)
           when 'redis'
             require 'legion/cache/redis'
             Legion::Cache::Redis.dup
