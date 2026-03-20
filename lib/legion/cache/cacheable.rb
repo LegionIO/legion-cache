@@ -5,6 +5,12 @@ require 'digest'
 module Legion
   module Cache
     module Cacheable
+      def self.build_cache_key(mod_name, method_name, exclude:, **kwargs)
+        filtered = kwargs.reject { |k, _| exclude.include?(k) }
+        args_hash = Digest::MD5.hexdigest(filtered.sort.to_s)
+        "#{mod_name}.#{method_name}.#{args_hash}"
+      end
+
       # In-memory fallback store (class-level, process-wide)
       def self.memory_store
         @memory_store ||= {}
