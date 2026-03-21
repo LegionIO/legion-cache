@@ -10,22 +10,30 @@ module Legion
       include Legion::Cache::Pool
       extend self # rubocop:disable Style/ModuleFunction
 
-      def client(pool_size: 20, timeout: 5, server: nil, servers: [], **)
+      def client(pool_size: 20, timeout: 5, server: nil, servers: [], cluster: nil, **) # rubocop:disable Metrics/ParameterLists
         return @client unless @client.nil?
 
         @pool_size = pool_size
-        @timeout = timeout
-
-        resolved = Legion::Cache::Settings.resolve_servers(
-          driver: 'redis', server: server, servers: servers
-        )
-        host, port = resolved.first.split(':')
+        @timeout   = timeout
 
         @client = ConnectionPool.new(size: pool_size, timeout: timeout) do
-          ::Redis.new(host: host, port: port.to_i)
+          build_redis_client(server: server, servers: servers, cluster: cluster)
         end
         @connected = true
         @client
+      end
+
+      def build_redis_client(server: nil, servers: [], cluster: nil)
+        nodes = Array(cluster).compact
+        if nodes.any?
+          ::Redis.new(cluster: nodes)
+        else
+          resolved = Legion::Cache::Settings.resolve_servers(
+            driver: 'redis', server: server, servers: servers
+          )
+          host, port = resolved.first.split(':')
+          ::Redis.new(host: host, port: port.to_i)
+        end
       end
 
       def get(key)
