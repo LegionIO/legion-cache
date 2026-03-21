@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.3.3] - 2026-03-20
+
+### Fixed
+- Serializer option (`Legion::JSON`) now correctly flows through to `Dalli::Client.new`, preventing Dalli from falling back to Marshal and emitting a security warning
+
 ## [1.3.2] - 2026-03-20
 
 ### Added

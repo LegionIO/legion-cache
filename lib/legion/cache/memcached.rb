@@ -25,6 +25,7 @@ module Legion
         Dalli.logger = Legion::Logging
         cache_opts = settings.merge(opts)
         cache_opts[:value_max_bytes] ||= 8 * 1024 * 1024
+        cache_opts[:serializer] ||= Legion::JSON
 
         @client = ConnectionPool.new(size: pool_size, timeout: timeout) do
           Dalli::Client.new(resolved, cache_opts)
