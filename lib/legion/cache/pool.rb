@@ -31,6 +31,7 @@ module Legion
         client.shutdown(&:close)
         @client = nil
         @connected = false
+        Legion::Logging.info "#{name} pool closed" if defined?(Legion::Logging)
       end
 
       def restart(**opts)
@@ -41,6 +42,7 @@ module Legion
         client_hash[:timeout] = opts[:timeout] if opts.key? :timeout
         client(**client_hash)
         @connected = true
+        Legion::Logging.info "#{name} pool restarted" if defined?(Legion::Logging)
       end
     end
   end

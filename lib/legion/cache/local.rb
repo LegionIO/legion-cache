@@ -36,23 +36,33 @@ module Legion
         end
 
         def get(key)
-          @driver.get(key)
+          result = @driver.get(key)
+          Legion::Logging.debug "[cache:local] GET #{key} hit=#{!result.nil?}" if defined?(Legion::Logging)
+          result
         end
 
         def set(key, value, ttl = 180)
-          @driver.set(key, value, ttl)
+          result = @driver.set(key, value, ttl)
+          Legion::Logging.debug "[cache:local] SET #{key} ttl=#{ttl} success=#{result}" if defined?(Legion::Logging)
+          result
         end
 
         def fetch(key, ttl = nil)
-          @driver.fetch(key, ttl)
+          result = @driver.fetch(key, ttl)
+          Legion::Logging.debug "[cache:local] FETCH #{key} hit=#{!result.nil?}" if defined?(Legion::Logging)
+          result
         end
 
         def delete(key)
-          @driver.delete(key)
+          result = @driver.delete(key)
+          Legion::Logging.debug "[cache:local] DELETE #{key} success=#{result}" if defined?(Legion::Logging)
+          result
         end
 
         def flush(delay = 0)
-          @driver.flush(delay)
+          result = @driver.flush(delay)
+          Legion::Logging.debug '[cache:local] FLUSH completed' if defined?(Legion::Logging)
+          result
         end
 
         def client

@@ -28,7 +28,12 @@ module Legion
 
             unless bypass_local_method_cache
               cached = Legion::Cache::Cacheable.cache_read(key, scope: config[:scope])
-              return cached unless cached.nil?
+              if cached.nil?
+                Legion::Logging.debug "[cacheable] miss key=#{key}" if defined?(Legion::Logging)
+              else
+                Legion::Logging.debug "[cacheable] hit key=#{key}" if defined?(Legion::Logging)
+                return cached
+              end
             end
 
             result = super(**kwargs)
@@ -86,7 +91,8 @@ module Legion
         return nil unless local_cache_available?
 
         Legion::Cache::Local.get(key)
-      rescue StandardError
+      rescue StandardError => e
+        Legion::Logging.warn "[cacheable] local_cache_read failed key=#{key} error=#{e.message}" if defined?(Legion::Logging)
         nil
       end
 
@@ -94,7 +100,8 @@ module Legion
         return unless local_cache_available?
 
         Legion::Cache::Local.set(key, value, ttl)
-      rescue StandardError
+      rescue StandardError => e
+        Legion::Logging.warn "[cacheable] local_cache_write failed key=#{key} error=#{e.message}" if defined?(Legion::Logging)
         nil
       end
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.7] - 2026-03-22
+
+### Added
+- Redis driver: `.debug` logging on get (hit/miss), set (ttl/success), delete, flush, mget (key count), mset (key count)
+- Redis driver: `.info` on successful client creation with host/port address
+- Redis driver: private `resolved_redis_address` helper for extracting address at connect time
+- Pool: `.info` on close and restart
+- Cacheable: `.debug` on cache hit/miss in wrapper; `.warn` on swallowed errors in `local_cache_read`/`local_cache_write`
+- Local: `.debug` on get/set/fetch/delete/flush operations
+- Cache: `.info` on successful shared cache setup (driver + server)
+- All new logging calls guarded with `if defined?(Legion::Logging)` for standalone use
+
 ## [1.3.6] - 2026-03-21
 
 ### Added

@@ -23,6 +23,7 @@ module Legion
                              replica: replica, fixed_hostname: fixed_hostname)
         end
         @connected = true
+        Legion::Logging.info "Redis connected to #{resolved_redis_address(server: server, servers: servers, cluster: cluster)}" if defined?(Legion::Logging)
         @client
       end
 
@@ -49,7 +50,9 @@ module Legion
       end
 
       def get(key)
-        client.with { |conn| conn.get(key) }
+        result = client.with { |conn| conn.get(key) }
+        Legion::Logging.debug "[cache] GET #{key} hit=#{!result.nil?}" if defined?(Legion::Logging)
+        result
       rescue ::Redis::BaseError => e
         log_cluster_error(e)
         raise
@@ -59,27 +62,33 @@ module Legion
       def set(key, value, ttl: nil)
         args = {}
         args[:ex] = ttl unless ttl.nil?
-        client.with { |conn| conn.set(key, value, **args) == 'OK' }
+        result = client.with { |conn| conn.set(key, value, **args) == 'OK' }
+        Legion::Logging.debug "[cache] SET #{key} ttl=#{ttl.inspect} success=#{result}" if defined?(Legion::Logging)
+        result
       rescue ::Redis::BaseError => e
         log_cluster_error(e)
         raise
       end
 
       def delete(key)
-        client.with { |conn| conn.del(key) == 1 }
+        result = client.with { |conn| conn.del(key) == 1 }
+        Legion::Logging.debug "[cache] DELETE #{key} success=#{result}" if defined?(Legion::Logging)
+        result
       rescue ::Redis::BaseError => e
         log_cluster_error(e)
         raise
       end
 
       def flush
-        client.with do |conn|
+        result = client.with do |conn|
           if cluster_mode?
             cluster_flush(conn)
           else
             conn.flushdb == 'OK'
           end
         end
+        Legion::Logging.debug '[cache] FLUSH completed' if defined?(Legion::Logging)
+        result
       rescue ::Redis::BaseError => e
         log_cluster_error(e)
         raise
@@ -89,14 +98,16 @@ module Legion
         keys = keys.flatten
         return {} if keys.empty?
 
-        client.with do |conn|
+        result = client.with do |conn|
           if cluster_mode?
             cluster_mget(conn, keys)
           else
-            result = conn.mget(*keys)
-            keys.zip(result).to_h
+            values = conn.mget(*keys)
+            keys.zip(values).to_h
           end
         end
+        Legion::Logging.debug "[cache] MGET keys=#{keys.size}" if defined?(Legion::Logging)
+        result
       rescue ::Redis::BaseError => e
         log_cluster_error(e)
         raise
@@ -105,13 +116,15 @@ module Legion
       def mset(hash)
         return true if hash.empty?
 
-        client.with do |conn|
+        result = client.with do |conn|
           if cluster_mode?
             cluster_mset(conn, hash)
           else
             conn.mset(*hash.flatten) == 'OK'
           end
         end
+        Legion::Logging.debug "[cache] MSET keys=#{hash.size}" if defined?(Legion::Logging)
+        result
       rescue ::Redis::BaseError => e
         log_cluster_error(e)
         raise
@@ -158,6 +171,15 @@ module Legion
         else
           { 0 => keys }
         end
+      end
+
+      def resolved_redis_address(server:, servers:, cluster:)
+        nodes = Array(cluster).compact
+        return nodes.join(', ') if nodes.any?
+
+        Legion::Cache::Settings.resolve_servers(driver: 'redis', server: server, servers: Array(servers)).first
+      rescue StandardError
+        'unknown'
       end
 
       def log_cluster_error(error)
