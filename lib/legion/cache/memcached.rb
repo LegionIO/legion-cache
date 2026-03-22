@@ -36,6 +36,7 @@ module Legion
         end
 
         @connected = true
+        Legion::Logging.info "Memcached connected to #{resolved.join(', ')}" if defined?(Legion::Logging)
         @client
       end
 

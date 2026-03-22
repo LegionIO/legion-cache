@@ -16,7 +16,8 @@ module Legion
           @driver = build_driver(driver_name)
           @driver.client(**settings, **)
           @connected = true
-          Legion::Logging.info "Legion::Cache::Local connected (#{driver_name})" if defined?(Legion::Logging)
+          servers = Array(settings[:servers]).join(', ')
+          Legion::Logging.info "Legion::Cache::Local connected (#{driver_name}) to #{servers}" if defined?(Legion::Logging)
         rescue StandardError => e
           Legion::Logging.warn "Legion::Cache::Local setup failed: #{e.message}" if defined?(Legion::Logging)
           @connected = false

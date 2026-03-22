@@ -86,9 +86,11 @@ module Legion
         @connected = true
         @using_local = false
         Legion::Settings[:cache][:connected] = true
-        driver = Legion::Settings[:cache][:driver] || 'dalli'
-        servers = Legion::Settings[:cache][:servers] || []
-        Legion::Logging.info "Legion::Cache connected (driver=#{driver} servers=#{Array(servers).first})" if defined?(Legion::Logging)
+        if defined?(Legion::Logging)
+          driver = Legion::Settings[:cache][:driver] || 'dalli'
+          servers = Array(Legion::Settings[:cache][:servers]).join(', ')
+          Legion::Logging.info "Legion::Cache connected (driver=#{driver}) to #{servers}"
+        end
       rescue StandardError => e
         Legion::Logging.warn "Shared cache unavailable (#{e.message}), falling back to Local" if defined?(Legion::Logging)
         if Legion::Cache::Local.connected?

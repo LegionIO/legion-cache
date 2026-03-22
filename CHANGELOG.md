@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.8] - 2026-03-22
+
+### Changed
+- Memcached driver now logs server addresses on connect
+- Local cache now logs server addresses on connect
+- Shared cache setup log now shows full server list instead of just first server
+
 ## [1.3.7] - 2026-03-22
 
 ### Added
