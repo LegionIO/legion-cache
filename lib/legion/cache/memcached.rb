@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'openssl'
 require 'dalli'
 require 'legion/cache/pool'
 
@@ -7,7 +8,7 @@ module Legion
   module Cache
     module Memcached
       include Legion::Cache::Pool
-      extend self # rubocop:disable Style/ModuleFunction
+      extend self
 
       def client(server: nil, servers: nil, **opts)
         return @client unless @client.nil?
@@ -26,6 +27,9 @@ module Legion
         cache_opts = settings.merge(opts)
         cache_opts[:value_max_bytes] ||= 8 * 1024 * 1024
         cache_opts[:serializer] ||= Legion::JSON
+
+        tls_ctx = memcached_tls_context(port: resolved.first.split(':').last.to_i)
+        cache_opts[:ssl_context] = tls_ctx if tls_ctx
 
         @client = ConnectionPool.new(size: pool_size, timeout: timeout) do
           Dalli::Client.new(resolved, cache_opts)
@@ -61,6 +65,28 @@ module Legion
 
       def flush(delay = 0)
         client.with { |conn| conn.flush(delay).first }
+      end
+
+      private
+
+      def memcached_tls_context(port:)
+        return nil unless defined?(Legion::Crypt::TLS)
+
+        tls = Legion::Crypt::TLS.resolve(memcached_tls_settings, port: port)
+        return nil unless tls[:enabled]
+
+        ctx = OpenSSL::SSL::SSLContext.new
+        ctx.verify_mode = tls[:verify] == :none ? OpenSSL::SSL::VERIFY_NONE : OpenSSL::SSL::VERIFY_PEER
+        ctx.ca_file     = tls[:ca] if tls[:ca]
+        ctx
+      end
+
+      def memcached_tls_settings
+        return {} unless defined?(Legion::Settings)
+
+        Legion::Settings[:cache][:tls] || {}
+      rescue StandardError
+        {}
       end
     end
   end

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.5] - 2026-03-21
+
+### Added
+- TLS support for Redis driver: `ssl: true` + `ssl_params` when TLS enabled via `Legion::Crypt::TLS.resolve`
+- TLS support for Memcached driver: `ssl_context` option when TLS enabled via `Legion::Crypt::TLS.resolve`
+- Port-based auto-detection: Redis TLS port 6380, Memcached TLS port 11207
+
 ## [1.3.3] - 2026-03-20
 
 ### Fixed

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'openssl'
 require 'redis'
 require 'legion/cache/pool'
 require 'legion/cache/settings'
@@ -8,7 +9,7 @@ module Legion
   module Cache
     module Redis
       include Legion::Cache::Pool
-      extend self # rubocop:disable Style/ModuleFunction
+      extend self
 
       def client(pool_size: 20, timeout: 5, server: nil, servers: [], cluster: nil, **) # rubocop:disable Metrics/ParameterLists
         return @client unless @client.nil?
@@ -32,8 +33,34 @@ module Legion
             driver: 'redis', server: server, servers: servers
           )
           host, port = resolved.first.split(':')
-          ::Redis.new(host: host, port: port.to_i)
+          redis_opts = { host: host, port: port.to_i }
+          redis_opts.merge!(redis_tls_options(port: port.to_i))
+          ::Redis.new(**redis_opts)
         end
+      end
+
+      private
+
+      def redis_tls_options(port:)
+        return {} unless defined?(Legion::Crypt::TLS)
+
+        tls = Legion::Crypt::TLS.resolve(cache_tls_settings, port: port)
+        return {} unless tls[:enabled]
+
+        ssl_params = {
+          verify_mode: tls[:verify] == :none ? OpenSSL::SSL::VERIFY_NONE : OpenSSL::SSL::VERIFY_PEER
+        }
+        ssl_params[:ca_file] = tls[:ca] if tls[:ca]
+
+        { ssl: true, ssl_params: ssl_params }
+      end
+
+      def cache_tls_settings
+        return {} unless defined?(Legion::Settings)
+
+        Legion::Settings[:cache][:tls] || {}
+      rescue StandardError
+        {}
       end
 
       def get(key)
