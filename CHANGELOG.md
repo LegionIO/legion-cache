@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.6] - 2026-03-21
+
+### Added
+- Redis Cluster mode: `cluster:`, `replica:`, `fixed_hostname:` options in `build_redis_client`
+- `cluster_mode?` predicate for runtime cluster detection
+- `mget(*keys)` and `mset(hash)` with automatic slot-aware grouping for cross-slot operations
+- Cluster-aware `flush` that iterates all primary nodes via `CLUSTER NODES`
+- Failover logging: `Redis::BaseError` rescues log via `Legion::Logging.warn` before re-raising
+- Settings defaults: `cluster: nil`, `replica: false`, `fixed_hostname: nil`
+
+### Fixed
+- `get`, `set`, `delete`, `flush` visibility changed from private to public (were inaccessible on the module directly)
+
 ## [1.3.5] - 2026-03-21
 
 ### Added

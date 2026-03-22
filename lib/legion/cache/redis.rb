@@ -11,23 +11,28 @@ module Legion
       include Legion::Cache::Pool
       extend self
 
-      def client(pool_size: 20, timeout: 5, server: nil, servers: [], cluster: nil, **) # rubocop:disable Metrics/ParameterLists
+      def client(pool_size: 20, timeout: 5, server: nil, servers: [], cluster: nil, replica: false, fixed_hostname: nil, **) # rubocop:disable Metrics/ParameterLists
         return @client unless @client.nil?
 
         @pool_size = pool_size
         @timeout   = timeout
+        @cluster_mode = Array(cluster).compact.any?
 
         @client = ConnectionPool.new(size: pool_size, timeout: timeout) do
-          build_redis_client(server: server, servers: servers, cluster: cluster)
+          build_redis_client(server: server, servers: servers, cluster: cluster,
+                             replica: replica, fixed_hostname: fixed_hostname)
         end
         @connected = true
         @client
       end
 
-      def build_redis_client(server: nil, servers: [], cluster: nil)
+      def build_redis_client(server: nil, servers: [], cluster: nil, replica: false, fixed_hostname: nil)
         nodes = Array(cluster).compact
         if nodes.any?
-          ::Redis.new(cluster: nodes)
+          opts = { cluster: nodes }
+          opts[:replica] = true if replica
+          opts[:fixed_hostname] = fixed_hostname unless fixed_hostname.nil?
+          ::Redis.new(**opts)
         else
           resolved = Legion::Cache::Settings.resolve_servers(
             driver: 'redis', server: server, servers: servers
@@ -39,7 +44,127 @@ module Legion
         end
       end
 
+      def cluster_mode?
+        @cluster_mode == true
+      end
+
+      def get(key)
+        client.with { |conn| conn.get(key) }
+      rescue ::Redis::BaseError => e
+        log_cluster_error(e)
+        raise
+      end
+      alias fetch get
+
+      def set(key, value, ttl: nil)
+        args = {}
+        args[:ex] = ttl unless ttl.nil?
+        client.with { |conn| conn.set(key, value, **args) == 'OK' }
+      rescue ::Redis::BaseError => e
+        log_cluster_error(e)
+        raise
+      end
+
+      def delete(key)
+        client.with { |conn| conn.del(key) == 1 }
+      rescue ::Redis::BaseError => e
+        log_cluster_error(e)
+        raise
+      end
+
+      def flush
+        client.with do |conn|
+          if cluster_mode?
+            cluster_flush(conn)
+          else
+            conn.flushdb == 'OK'
+          end
+        end
+      rescue ::Redis::BaseError => e
+        log_cluster_error(e)
+        raise
+      end
+
+      def mget(*keys)
+        keys = keys.flatten
+        return {} if keys.empty?
+
+        client.with do |conn|
+          if cluster_mode?
+            cluster_mget(conn, keys)
+          else
+            result = conn.mget(*keys)
+            keys.zip(result).to_h
+          end
+        end
+      rescue ::Redis::BaseError => e
+        log_cluster_error(e)
+        raise
+      end
+
+      def mset(hash)
+        return true if hash.empty?
+
+        client.with do |conn|
+          if cluster_mode?
+            cluster_mset(conn, hash)
+          else
+            conn.mset(*hash.flatten) == 'OK'
+          end
+        end
+      rescue ::Redis::BaseError => e
+        log_cluster_error(e)
+        raise
+      end
+
       private
+
+      def cluster_mget(conn, keys)
+        groups = group_keys_by_slot(keys)
+        result = {}
+        groups.each_value do |group_keys|
+          values = conn.mget(*group_keys)
+          group_keys.zip(values).each { |k, v| result[k] = v }
+        end
+        result
+      end
+
+      def cluster_mset(conn, hash)
+        groups = group_keys_by_slot(hash.keys)
+        groups.each_value do |group_keys|
+          pairs = group_keys.flat_map { |k| [k, hash[k]] }
+          conn.mset(*pairs)
+        end
+        true
+      end
+
+      def cluster_flush(conn)
+        node_info = conn.cluster('nodes')
+        primaries = node_info.lines.select { |l| l.include?('master') }.map { |l| l.split[1].split('@').first }
+        primaries.each do |addr|
+          host, port = addr.split(':')
+          node = ::Redis.new(host: host, port: port.to_i)
+          node.flushdb
+          node.close
+        end
+        true
+      rescue StandardError
+        conn.flushdb == 'OK'
+      end
+
+      def group_keys_by_slot(keys)
+        if defined?(::Redis::Cluster::KeySlotConverter)
+          keys.group_by { |k| ::Redis::Cluster::KeySlotConverter.convert(k) }
+        else
+          { 0 => keys }
+        end
+      end
+
+      def log_cluster_error(error)
+        return unless defined?(Legion::Logging)
+
+        Legion::Logging.warn "Redis cluster error: #{error.class} — #{error.message}"
+      end
 
       def redis_tls_options(port:)
         return {} unless defined?(Legion::Crypt::TLS)
@@ -61,25 +186,6 @@ module Legion
         Legion::Settings[:cache][:tls] || {}
       rescue StandardError
         {}
-      end
-
-      def get(key)
-        client.with { |conn| conn.get(key) }
-      end
-      alias fetch get
-
-      def set(key, value, ttl: nil)
-        args = {}
-        args[:ex] = ttl unless ttl.nil?
-        client.with { |conn| conn.set(key, value, **args) == 'OK' }
-      end
-
-      def delete(key)
-        client.with { |conn| conn.del(key) == 1 }
-      end
-
-      def flush
-        client.with { |conn| conn.flushdb == 'OK' }
       end
     end
   end

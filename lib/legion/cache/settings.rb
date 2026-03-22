@@ -13,19 +13,22 @@ module Legion
       Legion::Settings.merge_settings(:cache_local, local) if Legion::Settings.method_defined? :merge_settings
       def self.default
         {
-          driver:     driver,
-          servers:    resolve_servers(driver: driver),
-          connected:  false,
-          enabled:    true,
-          namespace:  'legion',
-          compress:   false,
-          failover:   true,
-          threadsafe: true,
-          expires_in: 0,
-          cache_nils: false,
-          pool_size:  10,
-          timeout:    5,
-          serializer: Legion::JSON
+          driver:         driver,
+          servers:        resolve_servers(driver: driver),
+          connected:      false,
+          enabled:        true,
+          namespace:      'legion',
+          compress:       false,
+          failover:       true,
+          threadsafe:     true,
+          expires_in:     0,
+          cache_nils:     false,
+          pool_size:      10,
+          timeout:        5,
+          serializer:     Legion::JSON,
+          cluster:        nil,
+          replica:        false,
+          fixed_hostname: nil
         }
       end
 

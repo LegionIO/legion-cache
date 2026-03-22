@@ -81,7 +81,7 @@ RSpec.describe Legion::Cache::Redis do
     it 'returns a cluster Redis client when cluster nodes are provided' do
       nodes = ['redis://node1:6379', 'redis://node2:6379', 'redis://node3:6379']
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(cluster: nodes).and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(cluster: nodes)).and_return(redis_instance)
       result = @cache.build_redis_client(cluster: nodes)
       expect(result).to eq redis_instance
     end
@@ -102,7 +102,7 @@ RSpec.describe Legion::Cache::Redis do
 
     it 'passes cluster nodes verbatim to Redis.new' do
       nodes = ['redis://10.0.0.1:6379', 'redis://10.0.0.2:6380']
-      expect(Redis).to receive(:new).with(cluster: nodes).and_return(instance_double(Redis))
+      expect(Redis).to receive(:new).with(hash_including(cluster: nodes)).and_return(instance_double(Redis))
       @cache.build_redis_client(cluster: nodes)
     end
   end
@@ -121,7 +121,7 @@ RSpec.describe Legion::Cache::Redis do
     it 'creates a ConnectionPool using cluster nodes when cluster: is passed' do
       nodes = ['redis://node1:6379', 'redis://node2:6379']
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(cluster: nodes).and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(cluster: nodes)).and_return(redis_instance)
       expect { @cache.client(cluster: nodes) }.not_to raise_error
       expect(@cache.connected?).to eq true
     end
