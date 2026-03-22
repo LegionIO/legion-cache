@@ -2,8 +2,8 @@
 
 begin
   require 'legion/settings'
-rescue StandardError
-  # empty block
+rescue StandardError => e
+  warn "legion-cache: failed to require legion/settings: #{e.message}"
 end
 
 module Legion

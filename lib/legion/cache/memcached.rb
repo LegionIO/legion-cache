@@ -86,7 +86,8 @@ module Legion
         return {} unless defined?(Legion::Settings)
 
         Legion::Settings[:cache][:tls] || {}
-      rescue StandardError
+      rescue StandardError => e
+        Legion::Logging.debug("Memcached#memcached_tls_settings failed: #{e.message}") if defined?(Legion::Logging)
         {}
       end
     end

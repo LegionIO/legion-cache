@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.9] - 2026-03-22
+
+### Changed
+- Added `Legion::Logging` calls (guarded with `defined?`) to all previously silent rescue blocks
+- `memcached.rb`: debug log on `memcached_tls_settings` failure
+- `redis.rb`: warn log on `cluster_flush` fallback; debug log on `resolved_redis_address` and `cache_tls_settings` failures
+- `settings.rb`: stdlib `warn` on `legion/settings` require failure (Logging not yet available at that point)
+
 ## [1.3.8] - 2026-03-22
 
 ### Changed

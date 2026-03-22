@@ -161,7 +161,8 @@ module Legion
           node.close
         end
         true
-      rescue StandardError
+      rescue StandardError => e
+        Legion::Logging.warn("Redis#cluster_flush cluster node flush failed, falling back to single flushdb: #{e.message}") if defined?(Legion::Logging)
         conn.flushdb == 'OK'
       end
 
@@ -178,7 +179,8 @@ module Legion
         return nodes.join(', ') if nodes.any?
 
         Legion::Cache::Settings.resolve_servers(driver: 'redis', server: server, servers: Array(servers)).first
-      rescue StandardError
+      rescue StandardError => e
+        Legion::Logging.debug("Redis#resolved_redis_address failed: #{e.message}") if defined?(Legion::Logging)
         'unknown'
       end
 
@@ -206,7 +208,8 @@ module Legion
         return {} unless defined?(Legion::Settings)
 
         Legion::Settings[:cache][:tls] || {}
-      rescue StandardError
+      rescue StandardError => e
+        Legion::Logging.debug("Redis#cache_tls_settings failed: #{e.message}") if defined?(Legion::Logging)
         {}
       end
     end
