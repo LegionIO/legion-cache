@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.11] - 2026-03-22
+
+### Added
+- `Legion::Cache::Helper` module: injectable cache mixin for LEX extensions
+- Namespaced `cache_set`, `cache_get`, `cache_delete`, `cache_fetch` for shared cache
+- Namespaced `local_cache_set`, `local_cache_get`, `local_cache_delete`, `local_cache_fetch` for per-node local cache
+
 ## [1.3.10] - 2026-03-22
 
 ### Changed
