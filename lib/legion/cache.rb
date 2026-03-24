@@ -64,11 +64,27 @@ module Legion
         super
       end
 
-      def set(key, value, ttl = 180)
-        return Legion::Cache::Memory.set(key, value, ttl) if @using_memory
-        return Legion::Cache::Local.set(key, value, ttl) if @using_local
+      def phi_max_ttl
+        return 3600 unless defined?(Legion::Settings)
 
-        super
+        Legion::Settings.dig(:cache, :compliance, :phi_max_ttl) || 3600
+      rescue StandardError
+        3600
+      end
+
+      def enforce_phi_ttl(ttl, phi: false, **)
+        return ttl unless phi == true
+
+        max = phi_max_ttl
+        [ttl, max].min
+      end
+
+      def set(key, value, ttl = 180, **)
+        effective_ttl = enforce_phi_ttl(ttl, **)
+        return Legion::Cache::Memory.set(key, value, effective_ttl) if @using_memory
+        return Legion::Cache::Local.set(key, value, effective_ttl) if @using_local
+
+        super(key, value, effective_ttl)
       end
 
       def fetch(key, ttl = nil)
