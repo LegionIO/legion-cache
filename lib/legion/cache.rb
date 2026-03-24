@@ -6,6 +6,7 @@ require 'legion/cache/cacheable'
 
 require 'legion/cache/memcached'
 require 'legion/cache/redis'
+require 'legion/cache/memory'
 require 'legion/cache/local'
 require 'legion/cache/helper'
 
@@ -21,15 +22,29 @@ module Legion
       def setup(**)
         return Legion::Settings[:cache][:connected] = true if connected?
 
+        if ENV['LEGION_MODE'] == 'lite'
+          Legion::Cache::Memory.setup
+          @using_memory = true
+          @connected = true
+          Legion::Settings[:cache][:connected] = true
+          Legion::Logging.info 'Legion::Cache using in-memory adapter (lite mode)' if defined?(Legion::Logging)
+          return
+        end
+
         setup_local
         setup_shared(**)
       end
 
       def shutdown
         Legion::Logging.info 'Shutting down Legion::Cache'
-        close unless @using_local
-        Legion::Cache::Local.shutdown if Legion::Cache::Local.connected?
+        if @using_memory
+          Legion::Cache::Memory.shutdown
+        else
+          close unless @using_local
+          Legion::Cache::Local.shutdown if Legion::Cache::Local.connected?
+        end
         @using_local = false
+        @using_memory = false
         @connected = false
         Legion::Settings[:cache][:connected] = false
       end
@@ -43,30 +58,35 @@ module Legion
       end
 
       def get(key)
+        return Legion::Cache::Memory.get(key) if @using_memory
         return Legion::Cache::Local.get(key) if @using_local
 
         super
       end
 
       def set(key, value, ttl = 180)
+        return Legion::Cache::Memory.set(key, value, ttl) if @using_memory
         return Legion::Cache::Local.set(key, value, ttl) if @using_local
 
         super
       end
 
       def fetch(key, ttl = nil)
+        return Legion::Cache::Memory.fetch(key, ttl) if @using_memory
         return Legion::Cache::Local.fetch(key, ttl) if @using_local
 
         super
       end
 
       def delete(key)
+        return Legion::Cache::Memory.delete(key) if @using_memory
         return Legion::Cache::Local.delete(key) if @using_local
 
         super
       end
 
       def flush(delay = 0)
+        return Legion::Cache::Memory.flush(delay) if @using_memory
         return Legion::Cache::Local.flush(delay) if @using_local
 
         super

@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.12] - 2026-03-24
+
+### Added
+- `Legion::Cache::Memory` adapter module for lite mode: pure in-memory cache with TTL expiry and thread-safe Mutex synchronization
+- Cache `setup` auto-detects `LEGION_MODE=lite` and activates Memory adapter, skipping Redis/Memcached
+- `@using_memory` flag routes `get`/`set`/`fetch`/`delete`/`flush` through Memory adapter
+- `shutdown` cleanly tears down Memory adapter when active
+
 ## [1.3.11] - 2026-03-22
 
 ### Added
