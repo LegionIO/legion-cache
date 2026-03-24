@@ -11,7 +11,8 @@ module Legion
       include Legion::Cache::Pool
       extend self
 
-      def client(pool_size: 20, timeout: 5, server: nil, servers: [], cluster: nil, replica: false, fixed_hostname: nil, **) # rubocop:disable Metrics/ParameterLists
+      def client(pool_size: 20, timeout: 5, server: nil, servers: [], cluster: nil, replica: false, # rubocop:disable Metrics/ParameterLists
+                 fixed_hostname: nil, username: nil, password: nil, db: nil, reconnect_attempts: 1, **)
         return @client unless @client.nil?
 
         @pool_size = pool_size
@@ -20,26 +21,34 @@ module Legion
 
         @client = ConnectionPool.new(size: pool_size, timeout: timeout) do
           build_redis_client(server: server, servers: servers, cluster: cluster,
-                             replica: replica, fixed_hostname: fixed_hostname)
+                             replica: replica, fixed_hostname: fixed_hostname,
+                             username: username, password: password, db: db,
+                             reconnect_attempts: reconnect_attempts)
         end
         @connected = true
         Legion::Logging.info "Redis connected to #{resolved_redis_address(server: server, servers: servers, cluster: cluster)}" if defined?(Legion::Logging)
         @client
       end
 
-      def build_redis_client(server: nil, servers: [], cluster: nil, replica: false, fixed_hostname: nil)
+      def build_redis_client(server: nil, servers: [], cluster: nil, replica: false, fixed_hostname: nil, # rubocop:disable Metrics/ParameterLists
+                             username: nil, password: nil, db: nil, reconnect_attempts: 1)
         nodes = Array(cluster).compact
         if nodes.any?
-          opts = { cluster: nodes }
+          opts = { cluster: nodes, reconnect_attempts: reconnect_attempts }
           opts[:replica] = true if replica
           opts[:fixed_hostname] = fixed_hostname unless fixed_hostname.nil?
+          opts[:username] = username unless username.nil?
+          opts[:password] = password unless password.nil?
           ::Redis.new(**opts)
         else
           resolved = Legion::Cache::Settings.resolve_servers(
             driver: 'redis', server: server, servers: servers
           )
           host, port = resolved.first.split(':')
-          redis_opts = { host: host, port: port.to_i }
+          redis_opts = { host: host, port: port.to_i, reconnect_attempts: reconnect_attempts }
+          redis_opts[:username] = username unless username.nil?
+          redis_opts[:password] = password unless password.nil?
+          redis_opts[:db] = db unless db.nil?
           redis_opts.merge!(redis_tls_options(port: port.to_i))
           ::Redis.new(**redis_opts)
         end

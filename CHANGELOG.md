@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.14] - 2026-03-24
+
+### Added
+- `username`, `password`, `db`, and `reconnect_attempts` options to Redis `client` and `build_redis_client`
+- Corresponding nil/default entries in `Settings.default` and `Settings.local`
+
 ## [1.3.13] - 2026-03-24
 
 ### Changed

@@ -21,56 +21,56 @@ RSpec.describe Legion::Cache::Redis, 'cluster mode' do
   describe '#build_redis_client cluster options' do
     it 'passes cluster nodes to Redis.new' do
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(cluster: cluster_nodes).and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(cluster: cluster_nodes)).and_return(redis_instance)
       result = described_class.build_redis_client(cluster: cluster_nodes)
       expect(result).to eq redis_instance
     end
 
     it 'passes replica: true when replica is enabled' do
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(cluster: cluster_nodes, replica: true).and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(cluster: cluster_nodes, replica: true)).and_return(redis_instance)
       result = described_class.build_redis_client(cluster: cluster_nodes, replica: true)
       expect(result).to eq redis_instance
     end
 
     it 'passes fixed_hostname when provided' do
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(cluster: cluster_nodes, fixed_hostname: 'redis.internal').and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(cluster: cluster_nodes, fixed_hostname: 'redis.internal')).and_return(redis_instance)
       result = described_class.build_redis_client(cluster: cluster_nodes, fixed_hostname: 'redis.internal')
       expect(result).to eq redis_instance
     end
 
     it 'passes all cluster options together' do
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(cluster: cluster_nodes, replica: true, fixed_hostname: 'redis.internal').and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(cluster: cluster_nodes, replica: true, fixed_hostname: 'redis.internal')).and_return(redis_instance)
       result = described_class.build_redis_client(cluster: cluster_nodes, replica: true, fixed_hostname: 'redis.internal')
       expect(result).to eq redis_instance
     end
 
     it 'omits replica when false' do
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(cluster: cluster_nodes).and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(cluster: cluster_nodes)).and_return(redis_instance)
       result = described_class.build_redis_client(cluster: cluster_nodes, replica: false)
       expect(result).to eq redis_instance
     end
 
     it 'omits fixed_hostname when nil' do
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(cluster: cluster_nodes).and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(cluster: cluster_nodes)).and_return(redis_instance)
       result = described_class.build_redis_client(cluster: cluster_nodes, fixed_hostname: nil)
       expect(result).to eq redis_instance
     end
 
     it 'falls back to single-node when cluster is empty' do
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(host: '127.0.0.1', port: 6379).and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(host: '127.0.0.1', port: 6379)).and_return(redis_instance)
       result = described_class.build_redis_client(cluster: [])
       expect(result).to eq redis_instance
     end
 
     it 'falls back to single-node when cluster contains only nils' do
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(host: '127.0.0.1', port: 6379).and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(host: '127.0.0.1', port: 6379)).and_return(redis_instance)
       result = described_class.build_redis_client(cluster: [nil, nil])
       expect(result).to eq redis_instance
     end

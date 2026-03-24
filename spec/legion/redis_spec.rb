@@ -73,7 +73,7 @@ RSpec.describe Legion::Cache::Redis do
 
     it 'returns a single-node Redis client when no cluster is given' do
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(host: '127.0.0.1', port: 6379).and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(host: '127.0.0.1', port: 6379)).and_return(redis_instance)
       result = @cache.build_redis_client
       expect(result).to eq redis_instance
     end
@@ -88,14 +88,14 @@ RSpec.describe Legion::Cache::Redis do
 
     it 'falls back to single-node when cluster is an empty array' do
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(host: '127.0.0.1', port: 6379).and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(host: '127.0.0.1', port: 6379)).and_return(redis_instance)
       result = @cache.build_redis_client(cluster: [])
       expect(result).to eq redis_instance
     end
 
     it 'falls back to single-node when cluster is nil' do
       redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(host: '127.0.0.1', port: 6379).and_return(redis_instance)
+      allow(Redis).to receive(:new).with(hash_including(host: '127.0.0.1', port: 6379)).and_return(redis_instance)
       result = @cache.build_redis_client(cluster: nil)
       expect(result).to eq redis_instance
     end
