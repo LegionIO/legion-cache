@@ -2,7 +2,7 @@
 
 Caching wrapper for the [LegionIO](https://github.com/LegionIO/LegionIO) framework. Provides a consistent interface for Memcached (via `dalli`) and Redis (via `redis` gem) with connection pooling. Driver selection is config-driven.
 
-**Version**: 1.3.2
+**Version**: 1.3.12
 
 ## Installation
 
@@ -39,6 +39,20 @@ Legion::Cache.flush            # flushdb
 
 Legion::Cache.shutdown
 ```
+
+## Lite Mode (No Infrastructure)
+
+When `LEGION_MODE=lite` is set, `Legion::Cache` activates the pure in-memory `Memory` adapter, bypassing Redis and Memcached entirely:
+
+```ruby
+ENV['LEGION_MODE'] = 'lite'
+Legion::Cache.setup
+Legion::Cache.using_memory?   # => true
+Legion::Cache.set('key', 'value', 60)
+Legion::Cache.get('key')      # => 'value'
+```
+
+The Memory adapter is thread-safe (Mutex), supports TTL expiry, and exposes the same `get`/`set`/`fetch`/`delete`/`flush` interface. Shutdown cleanly tears it down.
 
 ## Two-Tier Cache
 

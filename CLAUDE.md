@@ -8,14 +8,14 @@
 Caching wrapper for the LegionIO framework. Provides a consistent interface for Memcached (via `dalli`) and Redis (via `redis` gem) with connection pooling. Driver selection is config-driven.
 
 **GitHub**: https://github.com/LegionIO/legion-cache
-**Version**: 1.3.0
+**Version**: 1.3.12
 **License**: Apache-2.0
 
 ## Architecture
 
 ```
 Legion::Cache (singleton module)
-├── .setup(**opts)          # Connect to cache backend
+├── .setup(**opts)          # Connect to cache backend (auto-detects LEGION_MODE=lite -> Memory adapter)
 ├── .get(key)               # Retrieve cached value
 ├── .fetch(key, ttl)        # Get with block/TTL support (Memcached only; alias for get on Redis)
 ├── .set(key, value, ttl)   # Store value with optional TTL (positional on Memcached, keyword on Redis)
@@ -25,9 +25,10 @@ Legion::Cache (singleton module)
 ├── .size                   # Total pool connections
 ├── .available              # Idle pool connections
 ├── .restart(**opts)        # Close and reconnect pool with optional new opts
-├── .shutdown               # Close connections, mark disconnected
+├── .shutdown               # Close connections, mark disconnected (handles Memory adapter)
 ├── .local                  # Accessor for Legion::Cache::Local
 ├── .using_local?           # Whether fallback to local is active
+├── .using_memory?          # Whether Memory adapter (lite mode) is active
 │
 ├── Memcached               # Dalli-based Memcached driver (default)
 │   └── Uses connection_pool for thread safety
@@ -35,6 +36,9 @@ Legion::Cache (singleton module)
 ├── Redis                   # Redis driver
 │   └── Uses connection_pool for thread safety
 │   └── Default pool_size is 20 (Memcached default is 10)
+├── Memory                  # Lite mode adapter: pure in-memory cache, TTL expiry, Mutex thread-safety
+│   └── Activated by LEGION_MODE=lite env var; no Redis/Memcached required
+├── Helper                  # Injectable cache mixin for LEX extensions (namespaced cache_*/local_cache_*)
 ├── Local                   # Local cache tier (localhost Redis/Memcached, fallback target)
 │   ├── .setup              # Connect to local cache server (auto-detect driver)
 │   ├── .shutdown           # Close local connection
@@ -124,9 +128,11 @@ Dalli enforces a 1MB client-side limit by default (`value_max_bytes: 1_048_576`)
 
 | Path | Purpose |
 |------|---------|
-| `lib/legion/cache.rb` | Module entry, driver selection, setup/shutdown, fallback wiring |
+| `lib/legion/cache.rb` | Module entry, driver selection, setup/shutdown, fallback wiring, Memory adapter activation |
 | `lib/legion/cache/memcached.rb` | Dalli/Memcached driver implementation |
 | `lib/legion/cache/redis.rb` | Redis driver implementation |
+| `lib/legion/cache/memory.rb` | Lite mode Memory adapter: in-memory store with TTL + Mutex thread-safety |
+| `lib/legion/cache/helper.rb` | Injectable cache mixin for LEX extensions |
 | `lib/legion/cache/local.rb` | Local cache tier (localhost, fallback target) |
 | `lib/legion/cache/pool.rb` | Connection pool management |
 | `lib/legion/cache/settings.rb` | Default configuration + local defaults |
