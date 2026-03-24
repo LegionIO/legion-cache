@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.3.13] - 2026-03-24
+
+### Changed
+- Reindex docs: update CLAUDE.md and README with Memory adapter and Helper mixin docs
+
 ## [1.3.12] - 2026-03-24
 
 ### Added
