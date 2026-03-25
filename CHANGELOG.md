@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Accept ttl as positional or keyword argument in Cache.set for caller flexibility
+- Align Redis.set signature to positional ttl arg matching parent module convention
+
 ## [1.3.15] - 2026-03-24
 
 ### Added

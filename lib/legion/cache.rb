@@ -79,8 +79,9 @@ module Legion
         [ttl, max].min
       end
 
-      def set(key, value, ttl = 180, **)
-        effective_ttl = enforce_phi_ttl(ttl, **)
+      def set(key, value, ttl = nil, **opts)
+        ttl = opts.delete(:ttl) || ttl || 180
+        effective_ttl = enforce_phi_ttl(ttl, **opts)
         return Legion::Cache::Memory.set(key, value, effective_ttl) if @using_memory
         return Legion::Cache::Local.set(key, value, effective_ttl) if @using_local
 

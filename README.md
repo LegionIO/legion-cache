@@ -31,8 +31,8 @@ Legion::Cache.fetch('foobar')  # => 'testing' (get with block support)
 Legion::Cache.delete('foobar') # => true
 Legion::Cache.flush            # flush all keys
 
-# Redis driver — TTL is a keyword argument
-Legion::Cache.set('foobar', 'testing', ttl: 10)
+# Redis driver — TTL is the third positional argument
+Legion::Cache.set('foobar', 'testing', 10)
 Legion::Cache.get('foobar')    # => 'testing'
 Legion::Cache.delete('foobar') # => true
 Legion::Cache.flush            # flushdb

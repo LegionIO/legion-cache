@@ -68,7 +68,7 @@ module Legion
       end
       alias fetch get
 
-      def set(key, value, ttl: nil)
+      def set(key, value, ttl = nil)
         args = {}
         args[:ex] = ttl unless ttl.nil?
         result = client.with { |conn| conn.set(key, value, **args) == 'OK' }

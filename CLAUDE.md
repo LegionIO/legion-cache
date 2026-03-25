@@ -56,7 +56,7 @@ Legion::Cache (singleton module)
 - **Driver Selection at Load Time**: `Legion::Settings[:cache][:driver]` determines which module gets `extend`ed into `Legion::Cache` (`'redis'` or `'dalli'`)
 - **Connection Pooling**: Both drivers use `connection_pool` gem for thread-safe access
 - **Unified Interface**: Same `get`/`set`/`delete`/`flush`/`connected?`/`shutdown` methods regardless of backend
-- **TTL Signature Difference**: Memcached `set(key, value, ttl)` uses a positional TTL (default 180s); Redis `set(key, value, ttl: nil)` uses a keyword TTL
+- **Uniform TTL Signature**: All backends use `set(key, value, ttl)` with a positional TTL argument (Memcached default 180s, Redis/Memory/Local default nil)
 
 ### Two-Tier Cache Architecture
 
