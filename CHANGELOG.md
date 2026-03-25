@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.15] - 2026-03-24
+
+### Added
+- PHI-aware TTL enforcement: `Cache.set` accepts `phi: true` keyword option; TTL is capped at `cache.compliance.phi_max_ttl` (default 3600s) when set
+- `Legion::Cache.phi_max_ttl` — reads `cache.compliance.phi_max_ttl` from settings with 3600s default
+- `Legion::Cache.enforce_phi_ttl(ttl, phi:)` — public helper for PHI TTL cap logic
+
 ## [1.3.14] - 2026-03-24
 
 ### Added
