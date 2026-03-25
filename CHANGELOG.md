@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.3.17] - 2026-03-25
+
+### Added
+- `Legion::Cache::RedisHash` module: Redis hash and sorted-set operations (`hset`, `hgetall`, `hdel`, `zadd`, `zrangebyscore`, `zrem`, `expire`) with `redis_available?` guard and safe defaults when Redis is not connected
+- Auto-required from `legion/cache.rb` alongside the existing Redis adapter
+
+## [1.3.16] - 2026-03-25
+
 ### Fixed
 - Accept ttl as positional or keyword argument in Cache.set for caller flexibility
 - Align Redis.set signature to positional ttl arg matching parent module convention

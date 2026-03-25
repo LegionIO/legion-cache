@@ -6,6 +6,7 @@ require 'legion/cache/cacheable'
 
 require 'legion/cache/memcached'
 require 'legion/cache/redis'
+require 'legion/cache/redis_hash'
 require 'legion/cache/memory'
 require 'legion/cache/local'
 require 'legion/cache/helper'
