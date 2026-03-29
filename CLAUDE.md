@@ -8,7 +8,7 @@
 Caching wrapper for the LegionIO framework. Provides a consistent interface for Memcached (via `dalli`) and Redis (via `redis` gem) with connection pooling. Driver selection is config-driven.
 
 **GitHub**: https://github.com/LegionIO/legion-cache
-**Version**: 1.3.12
+**Version**: 1.3.17
 **License**: Apache-2.0
 
 ## Architecture
@@ -39,6 +39,7 @@ Legion::Cache (singleton module)
 ├── Memory                  # Lite mode adapter: pure in-memory cache, TTL expiry, Mutex thread-safety
 │   └── Activated by LEGION_MODE=lite env var; no Redis/Memcached required
 ├── Helper                  # Injectable cache mixin for LEX extensions (namespaced cache_*/local_cache_*)
+├── RedisHash               # Redis-specific sorted set + hash operations (hset/hgetall/hdel/zadd/zrangebyscore/zrem/expire); Redis-only, module_function pattern
 ├── Local                   # Local cache tier (localhost Redis/Memcached, fallback target)
 │   ├── .setup              # Connect to local cache server (auto-detect driver)
 │   ├── .shutdown           # Close local connection
@@ -134,9 +135,24 @@ Dalli enforces a 1MB client-side limit by default (`value_max_bytes: 1_048_576`)
 | `lib/legion/cache/memory.rb` | Lite mode Memory adapter: in-memory store with TTL + Mutex thread-safety |
 | `lib/legion/cache/helper.rb` | Injectable cache mixin for LEX extensions |
 | `lib/legion/cache/local.rb` | Local cache tier (localhost, fallback target) |
+| `lib/legion/cache/redis_hash.rb` | Redis sorted set + hash operations (hset/hgetall/hdel/zadd/zrangebyscore/zrem/expire) |
 | `lib/legion/cache/pool.rb` | Connection pool management |
 | `lib/legion/cache/settings.rb` | Default configuration + local defaults |
 | `lib/legion/cache/version.rb` | VERSION constant |
+
+## PHI TTL Cap
+
+When `phi: true` is passed to `set`, the TTL is capped at `cache.compliance.phi_max_ttl` (default 3600s). This enforces the HIPAA PHI TTL policy in legion-logging. The `enforce_phi_ttl(ttl, phi: false)` method applies the cap; without `phi: true` the TTL is passed through unchanged.
+
+```json
+{
+  "cache": {
+    "compliance": {
+      "phi_max_ttl": 3600
+    }
+  }
+}
+```
 
 ## Role in LegionIO
 

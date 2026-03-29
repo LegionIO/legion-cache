@@ -2,7 +2,7 @@
 
 Caching wrapper for the [LegionIO](https://github.com/LegionIO/LegionIO) framework. Provides a consistent interface for Memcached (via `dalli`) and Redis (via `redis` gem) with connection pooling. Driver selection is config-driven.
 
-**Version**: 1.3.12
+**Version**: 1.3.17
 
 ## Installation
 
