@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+- Layered TTL resolution in Helper (per-call → LEX override → Settings → FALLBACK_TTL)
+- `cache_default_ttl` / `local_cache_default_ttl` — LEX-overridable default TTL methods
+- `cache_exist?` / `local_cache_exist?` — key existence checks
+- `cache_connected?` / `local_cache_connected?` — connection status helpers
+- `cache_pool_size` / `cache_pool_available` — pool info (shared tier)
+- `local_cache_pool_size` / `local_cache_pool_available` — pool info (local tier)
+- `phi:` keyword argument on `cache_set` / `local_cache_set` for PHI TTL enforcement
+- `default_ttl` key in Settings.default and Settings.local (defaults to 60)
+
 ## [1.3.17] - 2026-03-25
 
 ### Added
