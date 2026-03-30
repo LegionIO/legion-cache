@@ -2,6 +2,6 @@
 
 module Legion
   module Cache
-    VERSION = '1.3.17'
+    VERSION = '1.3.18'
   end
 end
