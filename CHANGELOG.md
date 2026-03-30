@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.3.18] - 2026-03-29
+
 ### Added
 - Layered TTL resolution in Helper (per-call → LEX override → Settings → FALLBACK_TTL)
 - `cache_default_ttl` / `local_cache_default_ttl` — LEX-overridable default TTL methods
