@@ -269,4 +269,332 @@ RSpec.describe Legion::Cache::Helper do
       expect(subject.local_cache_pool_available).to eq(0)
     end
   end
+
+  # --- Issue #3: cache_mget / cache_mset ---
+
+  describe '#cache_mget' do
+    context 'with Redis backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(true) }
+
+      it 'delegates to Legion::Cache.mget with namespaced keys and un-namespaces the result' do
+        allow(Legion::Cache).to receive(:mget).with('microsoft_teams:a', 'microsoft_teams:b')
+                                              .and_return({ 'microsoft_teams:a' => 'v1', 'microsoft_teams:b' => 'v2' })
+        expect(subject.cache_mget(':a', ':b')).to eq({ ':a' => 'v1', ':b' => 'v2' })
+      end
+
+      it 'returns empty hash for empty key list' do
+        expect(subject.cache_mget).to eq({})
+      end
+
+      it 'returns empty hash on error' do
+        allow(Legion::Cache).to receive(:mget).and_raise(StandardError, 'fail')
+        expect(subject.cache_mget(':x')).to eq({})
+      end
+    end
+
+    context 'with Memcached backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(false) }
+
+      it 'falls back to sequential gets and un-namespaces keys' do
+        allow(Legion::Cache).to receive(:get).with('microsoft_teams:a').and_return('v1')
+        allow(Legion::Cache).to receive(:get).with('microsoft_teams:b').and_return('v2')
+        expect(subject.cache_mget(':a', ':b')).to eq({ ':a' => 'v1', ':b' => 'v2' })
+      end
+
+      it 'accepts an array argument' do
+        allow(Legion::Cache).to receive(:get).with('microsoft_teams:x').and_return('vx')
+        expect(subject.cache_mget([':x'])).to eq({ ':x' => 'vx' })
+      end
+    end
+  end
+
+  describe '#cache_mset' do
+    context 'with Redis backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(true) }
+
+      it 'delegates to Legion::Cache.mset with namespaced keys' do
+        expect(Legion::Cache).to receive(:mset).with({ 'microsoft_teams:a' => 'v1', 'microsoft_teams:b' => 'v2' })
+        subject.cache_mset({ ':a' => 'v1', ':b' => 'v2' })
+      end
+
+      it 'returns true for empty hash without calling mset' do
+        expect(Legion::Cache).not_to receive(:mset)
+        expect(subject.cache_mset({})).to be true
+      end
+
+      it 'returns false on error' do
+        allow(Legion::Cache).to receive(:mset).and_raise(StandardError, 'fail')
+        expect(subject.cache_mset({ ':x' => 'v' })).to be false
+      end
+    end
+
+    context 'with Memcached backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(false) }
+
+      it 'falls back to sequential sets using default TTL' do
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:a', 'v1', 60)
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:b', 'v2', 60)
+        subject.cache_mset({ ':a' => 'v1', ':b' => 'v2' })
+      end
+
+      it 'uses explicit TTL when provided' do
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:k', 'val', 300)
+        subject.cache_mset({ ':k' => 'val' }, ttl: 300)
+      end
+
+      it 'returns true on success' do
+        allow(Legion::Cache).to receive(:set)
+        expect(subject.cache_mset({ ':k' => 'v' })).to be true
+      end
+    end
+  end
+
+  describe '#local_cache_mget' do
+    context 'with Redis local backend' do
+      before do
+        allow(subject).to receive(:local_cache_redis?).and_return(true)
+        allow(Legion::Cache::Local).to receive(:mget).with('microsoft_teams:a')
+                                                     .and_return({ 'microsoft_teams:a' => 'lv1' })
+      end
+
+      it 'delegates to Legion::Cache::Local.mget and un-namespaces keys' do
+        expect(subject.local_cache_mget(':a')).to eq({ ':a' => 'lv1' })
+      end
+    end
+
+    context 'with Memcached local backend' do
+      before { allow(subject).to receive(:local_cache_redis?).and_return(false) }
+
+      it 'falls back to sequential local gets' do
+        allow(Legion::Cache::Local).to receive(:get).with('microsoft_teams:a').and_return('lv1')
+        expect(subject.local_cache_mget(':a')).to eq({ ':a' => 'lv1' })
+      end
+    end
+
+    it 'returns empty hash for empty key list' do
+      expect(subject.local_cache_mget).to eq({})
+    end
+  end
+
+  describe '#local_cache_mset' do
+    context 'with Redis local backend' do
+      before { allow(subject).to receive(:local_cache_redis?).and_return(true) }
+
+      it 'delegates to Legion::Cache::Local.mset with namespaced keys' do
+        expect(Legion::Cache::Local).to receive(:mset).with({ 'microsoft_teams:k' => 'v' })
+        subject.local_cache_mset({ ':k' => 'v' })
+      end
+    end
+
+    context 'with Memcached local backend' do
+      before { allow(subject).to receive(:local_cache_redis?).and_return(false) }
+
+      it 'falls back to sequential local sets' do
+        expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:k', 'v', 60)
+        subject.local_cache_mset({ ':k' => 'v' })
+      end
+
+      it 'uses explicit TTL when provided' do
+        expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:k', 'v', 120)
+        subject.local_cache_mset({ ':k' => 'v' }, ttl: 120)
+      end
+    end
+
+    it 'returns true for empty hash' do
+      expect(subject.local_cache_mset({})).to be true
+    end
+  end
+
+  # --- Issue #4: RedisHash helper methods ---
+
+  describe '#cache_hset' do
+    context 'with Redis backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(true) }
+
+      it 'delegates to RedisHash.hset with namespaced key' do
+        expect(Legion::Cache::RedisHash).to receive(:hset).with('microsoft_teams:h', { 'f' => 'v' }).and_return(true)
+        expect(subject.cache_hset(':h', { 'f' => 'v' })).to be true
+      end
+
+      it 'returns false on error' do
+        allow(Legion::Cache::RedisHash).to receive(:hset).and_raise(StandardError, 'fail')
+        expect(subject.cache_hset(':h', {})).to be false
+      end
+    end
+
+    context 'with Memcached backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(false) }
+
+      it 'serializes hash as JSON via cache set (merge)' do
+        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return(nil)
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:h', '{"f":"v"}', 60)
+        subject.cache_hset(':h', { 'f' => 'v' })
+      end
+
+      it 'merges new fields into existing JSON hash' do
+        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return('{"existing":"val"}')
+        expect(Legion::Cache).to receive(:set) do |_key, json, _ttl|
+          parsed = Legion::JSON.load(json)
+          expect(parsed).to include(existing: 'val', f: 'v')
+        end
+        subject.cache_hset(':h', { 'f' => 'v' })
+      end
+    end
+  end
+
+  describe '#cache_hgetall' do
+    context 'with Redis backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(true) }
+
+      it 'delegates to RedisHash.hgetall with namespaced key' do
+        expect(Legion::Cache::RedisHash).to receive(:hgetall).with('microsoft_teams:h').and_return({ 'f' => 'v' })
+        expect(subject.cache_hgetall(':h')).to eq({ 'f' => 'v' })
+      end
+
+      it 'returns nil on error' do
+        allow(Legion::Cache::RedisHash).to receive(:hgetall).and_raise(StandardError, 'fail')
+        expect(subject.cache_hgetall(':h')).to be_nil
+      end
+    end
+
+    context 'with Memcached backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(false) }
+
+      it 'deserializes JSON from cache and returns string-key hash' do
+        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return('{"f":"v"}')
+        result = subject.cache_hgetall(':h')
+        expect(result).to eq({ 'f' => 'v' })
+      end
+
+      it 'returns nil when key is absent' do
+        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return(nil)
+        expect(subject.cache_hgetall(':h')).to be_nil
+      end
+    end
+  end
+
+  describe '#cache_hdel' do
+    context 'with Redis backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(true) }
+
+      it 'delegates to RedisHash.hdel with namespaced key' do
+        expect(Legion::Cache::RedisHash).to receive(:hdel).with('microsoft_teams:h', 'f1').and_return(1)
+        expect(subject.cache_hdel(':h', 'f1')).to eq(1)
+      end
+
+      it 'returns 0 on error' do
+        allow(Legion::Cache::RedisHash).to receive(:hdel).and_raise(StandardError, 'fail')
+        expect(subject.cache_hdel(':h', 'f')).to eq(0)
+      end
+    end
+
+    context 'with Memcached backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(false) }
+
+      it 'removes specified fields from JSON hash and returns count' do
+        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return('{"a":"1","b":"2"}')
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:h', anything, 60) do |_k, json, _ttl|
+          parsed = Legion::JSON.load(json)
+          expect(parsed.keys.map(&:to_s)).not_to include('a')
+        end
+        expect(subject.cache_hdel(':h', 'a')).to eq(1)
+      end
+
+      it 'returns 0 when key is absent' do
+        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return(nil)
+        expect(subject.cache_hdel(':h', 'f')).to eq(0)
+      end
+    end
+  end
+
+  describe '#cache_zadd' do
+    context 'with Redis backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(true) }
+
+      it 'delegates to RedisHash.zadd with namespaced key' do
+        expect(Legion::Cache::RedisHash).to receive(:zadd).with('microsoft_teams:z', 1.5, 'member').and_return(true)
+        expect(subject.cache_zadd(':z', 1.5, 'member')).to be true
+      end
+    end
+
+    context 'with Memcached backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(false) }
+
+      it 'raises NotImplementedError' do
+        expect { subject.cache_zadd(':z', 1.0, 'm') }.to raise_error(NotImplementedError, /cache_zadd/)
+      end
+    end
+  end
+
+  describe '#cache_zrangebyscore' do
+    context 'with Redis backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(true) }
+
+      it 'delegates to RedisHash.zrangebyscore with namespaced key' do
+        expect(Legion::Cache::RedisHash).to receive(:zrangebyscore)
+          .with('microsoft_teams:z', 0, 100, limit: nil)
+          .and_return(%w[a b])
+        expect(subject.cache_zrangebyscore(':z', 0, 100)).to eq(%w[a b])
+      end
+
+      it 'passes limit option' do
+        expect(Legion::Cache::RedisHash).to receive(:zrangebyscore)
+          .with('microsoft_teams:z', 0, 100, limit: [0, 5])
+          .and_return(['a'])
+        expect(subject.cache_zrangebyscore(':z', 0, 100, limit: [0, 5])).to eq(['a'])
+      end
+    end
+
+    context 'with Memcached backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(false) }
+
+      it 'raises NotImplementedError' do
+        expect { subject.cache_zrangebyscore(':z', 0, 100) }.to raise_error(NotImplementedError, /cache_zrangebyscore/)
+      end
+    end
+  end
+
+  describe '#cache_zrem' do
+    context 'with Redis backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(true) }
+
+      it 'delegates to RedisHash.zrem with namespaced key' do
+        expect(Legion::Cache::RedisHash).to receive(:zrem).with('microsoft_teams:z', 'm').and_return(true)
+        expect(subject.cache_zrem(':z', 'm')).to be true
+      end
+    end
+
+    context 'with Memcached backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(false) }
+
+      it 'raises NotImplementedError' do
+        expect { subject.cache_zrem(':z', 'm') }.to raise_error(NotImplementedError, /cache_zrem/)
+      end
+    end
+  end
+
+  describe '#cache_expire' do
+    context 'with Redis backend' do
+      before { allow(subject).to receive(:cache_redis?).and_return(true) }
+
+      it 'delegates to RedisHash.expire with namespaced key' do
+        expect(Legion::Cache::RedisHash).to receive(:expire).with('microsoft_teams:k', 300).and_return(true)
+        expect(subject.cache_expire(':k', 300)).to be true
+      end
+
+      it 'returns false on error' do
+        allow(Legion::Cache::RedisHash).to receive(:expire).and_raise(StandardError, 'fail')
+        expect(subject.cache_expire(':k', 60)).to be false
+      end
+    end
+
+    context 'with Memcached backend (no-op)' do
+      before { allow(subject).to receive(:cache_redis?).and_return(false) }
+
+      it 'returns false without calling RedisHash' do
+        expect(Legion::Cache::RedisHash).not_to receive(:expire)
+        expect(subject.cache_expire(':k', 300)).to be false
+      end
+    end
+  end
 end

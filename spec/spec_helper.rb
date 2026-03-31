@@ -11,6 +11,7 @@ Legion::Logging.setup(log_file: './legion.log')
 require 'legion/cache/settings'
 require 'legion/cache/version'
 require 'legion/cache/local'
+require 'legion/cache/redis_hash'
 require 'legion/cache/helper'
 
 Legion::Settings.merge_settings('cache', Legion::Cache::Settings.default)

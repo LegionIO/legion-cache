@@ -54,6 +54,162 @@ module Legion
         !Legion::Cache.get(cache_namespace + key).nil?
       end
 
+      # --- Batch Operations (shared tier) ---
+      # Issue #3: mget/mset with Memcached safety
+
+      # Returns a Hash of { key => value } pairs. Prefixes all keys with cache_namespace.
+      # Delegates to Legion::Cache.mget on Redis; falls back to sequential gets on Memcached.
+      def cache_mget(*keys)
+        keys = keys.flatten
+        return {} if keys.empty?
+
+        namespaced = keys.map { |k| cache_namespace + k }
+
+        if cache_redis?
+          raw = Legion::Cache.mget(*namespaced)
+          keys.to_h { |k| [k, raw[cache_namespace + k]] }
+        else
+          keys.to_h { |k| [k, Legion::Cache.get(cache_namespace + k)] }
+        end
+      rescue StandardError => e
+        log_cache_error('cache_mget', e)
+        {}
+      end
+
+      # Stores multiple key-value pairs. Accepts a Hash of { key => value }.
+      # TTL follows the same resolution chain as cache_set.
+      # Delegates to Legion::Cache.mset on Redis; falls back to sequential sets on Memcached.
+      def cache_mset(hash, ttl: nil)
+        return true if hash.empty?
+
+        effective_ttl = ttl || cache_default_ttl
+
+        if cache_redis?
+          namespaced = hash.transform_keys { |k| cache_namespace + k }
+          Legion::Cache.mset(namespaced)
+        else
+          hash.each { |k, v| Legion::Cache.set(cache_namespace + k, v, effective_ttl) }
+          true
+        end
+      rescue StandardError => e
+        log_cache_error('cache_mset', e)
+        false
+      end
+
+      # --- Batch Operations (local tier) ---
+
+      def local_cache_mget(*keys)
+        keys = keys.flatten
+        return {} if keys.empty?
+
+        if local_cache_redis?
+          namespaced = keys.map { |k| cache_namespace + k }
+          raw = Legion::Cache::Local.mget(*namespaced)
+          keys.to_h { |k| [k, raw[cache_namespace + k]] }
+        else
+          keys.to_h { |k| [k, Legion::Cache::Local.get(cache_namespace + k)] }
+        end
+      rescue StandardError => e
+        log_cache_error('local_cache_mget', e)
+        {}
+      end
+
+      def local_cache_mset(hash, ttl: nil)
+        return true if hash.empty?
+
+        effective_ttl = ttl || local_cache_default_ttl
+
+        if local_cache_redis?
+          namespaced = hash.transform_keys { |k| cache_namespace + k }
+          Legion::Cache::Local.mset(namespaced)
+        else
+          hash.each { |k, v| Legion::Cache::Local.set(cache_namespace + k, v, effective_ttl) }
+          true
+        end
+      rescue StandardError => e
+        log_cache_error('local_cache_mset', e)
+        false
+      end
+
+      # --- RedisHash Helpers (shared tier) ---
+      # Issue #4: namespaced wrappers for RedisHash operations with Memcached fallback
+
+      def cache_hset(key, hash)
+        if cache_redis?
+          Legion::Cache::RedisHash.hset(cache_namespace + key, hash)
+        else
+          memcached_hash_merge(cache_namespace + key, hash)
+        end
+      rescue StandardError => e
+        log_cache_error('cache_hset', e)
+        false
+      end
+
+      def cache_hgetall(key)
+        if cache_redis?
+          Legion::Cache::RedisHash.hgetall(cache_namespace + key)
+        else
+          memcached_hash_load(cache_namespace + key)
+        end
+      rescue StandardError => e
+        log_cache_error('cache_hgetall', e)
+        nil
+      end
+
+      def cache_hdel(key, *fields)
+        if cache_redis?
+          Legion::Cache::RedisHash.hdel(cache_namespace + key, *fields)
+        else
+          memcached_hash_delete_fields(cache_namespace + key, fields)
+        end
+      rescue StandardError => e
+        log_cache_error('cache_hdel', e)
+        0
+      end
+
+      def cache_zadd(key, score, member)
+        raise_sorted_set_unsupported('cache_zadd') unless cache_redis?
+
+        Legion::Cache::RedisHash.zadd(cache_namespace + key, score, member)
+      rescue NotImplementedError
+        raise
+      rescue StandardError => e
+        log_cache_error('cache_zadd', e)
+        false
+      end
+
+      def cache_zrangebyscore(key, min, max, limit: nil)
+        raise_sorted_set_unsupported('cache_zrangebyscore') unless cache_redis?
+
+        Legion::Cache::RedisHash.zrangebyscore(cache_namespace + key, min, max, limit: limit)
+      rescue NotImplementedError
+        raise
+      rescue StandardError => e
+        log_cache_error('cache_zrangebyscore', e)
+        []
+      end
+
+      def cache_zrem(key, member)
+        raise_sorted_set_unsupported('cache_zrem') unless cache_redis?
+
+        Legion::Cache::RedisHash.zrem(cache_namespace + key, member)
+      rescue NotImplementedError
+        raise
+      rescue StandardError => e
+        log_cache_error('cache_zrem', e)
+        false
+      end
+
+      # Sets TTL on a key. No-op on Memcached (TTL is set at write time).
+      def cache_expire(key, seconds)
+        return false unless cache_redis?
+
+        Legion::Cache::RedisHash.expire(cache_namespace + key, seconds)
+      rescue StandardError => e
+        log_cache_error('cache_expire', e)
+        false
+      end
+
       # --- Core Operations (local tier) ---
 
       def local_cache_set(key, value, ttl: nil, phi: false)
@@ -146,6 +302,56 @@ module Legion
         target.gsub(/([A-Z]+)([A-Z][a-z])/, '\1_\2')
               .gsub(/([a-z\d])([A-Z])/, '\1_\2')
               .downcase
+      end
+
+      def cache_redis?
+        Legion::Cache::RedisHash.redis_available?
+      end
+
+      def local_cache_redis?
+        defined?(Legion::Cache::Local) &&
+          Legion::Cache::Local.respond_to?(:mget) &&
+          Legion::Cache::Local.connected?
+      end
+
+      def memcached_hash_merge(full_key, new_fields)
+        current = memcached_hash_load(full_key) || {}
+        merged = current.merge(new_fields.transform_keys(&:to_s))
+        Legion::Cache.set(full_key, Legion::JSON.dump(merged), cache_default_ttl)
+        true
+      end
+
+      def memcached_hash_load(full_key)
+        raw = Legion::Cache.get(full_key)
+        return nil if raw.nil?
+
+        parsed = Legion::JSON.load(raw)
+        # Legion::JSON.load returns symbol keys; convert to string keys to mirror Redis hgetall
+        parsed.transform_keys(&:to_s)
+      rescue StandardError
+        nil
+      end
+
+      def memcached_hash_delete_fields(full_key, fields)
+        current = memcached_hash_load(full_key)
+        return 0 if current.nil?
+
+        str_fields = fields.map(&:to_s)
+        removed = str_fields.count { |f| current.key?(f) }
+        str_fields.each { |f| current.delete(f) }
+        Legion::Cache.set(full_key, Legion::JSON.dump(current), cache_default_ttl)
+        removed
+      end
+
+      def raise_sorted_set_unsupported(method)
+        raise NotImplementedError,
+              "#{method} requires a Redis backend — sorted sets are not supported on Memcached"
+      end
+
+      def log_cache_error(method, error)
+        return unless defined?(Legion::Logging)
+
+        Legion::Logging.warn "[cache:helper] #{method} failed: #{error.class} — #{error.message}"
       end
     end
   end
