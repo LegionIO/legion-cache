@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.3.19] - 2026-03-31
+
+### Added
+- `cache_mget` / `cache_mset` (and `local_cache_mget` / `local_cache_mset`) on `Helper` mixin — delegates to Redis batch ops, falls back to sequential get/set on Memcached (closes #3)
+- `cache_hset`, `cache_hgetall`, `cache_hdel`, `cache_zadd`, `cache_zrangebyscore`, `cache_zrem`, `cache_expire` on `Helper` mixin — delegates to `RedisHash` with namespace prefixing; hash ops fall back to JSON-serialized Memcached values, sorted-set ops raise `NotImplementedError`, expire is a no-op on Memcached (closes #4)
+
 ## [1.3.18] - 2026-03-29
 
 ### Added
