@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.3.20] - 2026-03-31
+
+### Fixed
+- Forward `timeout` setting to `::Redis.new` — was silently using redis gem's 1.0s default instead of configured 5s, causing spurious timeouts on service mesh connections
+- Forward `timeout` to `::Redis.new` in cluster mode path as well
+
+### Changed
+- Increase `reconnect_attempts` from `1` to `[0, 0.5, 1]` (shared) / `[0, 0.25, 0.5]` (local) — 3 retries with escalating backoff instead of 1 instant retry, improving resilience for service mesh and remote Redis connections
+
 ## [1.3.19] - 2026-03-31
 
 ### Added

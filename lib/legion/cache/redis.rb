@@ -12,7 +12,7 @@ module Legion
       extend self
 
       def client(pool_size: 20, timeout: 5, server: nil, servers: [], cluster: nil, replica: false, # rubocop:disable Metrics/ParameterLists
-                 fixed_hostname: nil, username: nil, password: nil, db: nil, reconnect_attempts: 1, **)
+                 fixed_hostname: nil, username: nil, password: nil, db: nil, reconnect_attempts: [0, 0.5, 1], **)
         return @client unless @client.nil?
 
         @pool_size = pool_size
@@ -31,10 +31,10 @@ module Legion
       end
 
       def build_redis_client(server: nil, servers: [], cluster: nil, replica: false, fixed_hostname: nil, # rubocop:disable Metrics/ParameterLists
-                             username: nil, password: nil, db: nil, reconnect_attempts: 1)
+                             username: nil, password: nil, db: nil, reconnect_attempts: [0, 0.5, 1])
         nodes = Array(cluster).compact
         if nodes.any?
-          opts = { cluster: nodes, reconnect_attempts: reconnect_attempts }
+          opts = { cluster: nodes, reconnect_attempts: reconnect_attempts, timeout: @timeout }
           opts[:replica] = true if replica
           opts[:fixed_hostname] = fixed_hostname unless fixed_hostname.nil?
           opts[:username] = username unless username.nil?
@@ -45,7 +45,8 @@ module Legion
             driver: 'redis', server: server, servers: servers
           )
           host, port = resolved.first.split(':')
-          redis_opts = { host: host, port: port.to_i, reconnect_attempts: reconnect_attempts }
+          redis_opts = { host: host, port: port.to_i, reconnect_attempts: reconnect_attempts,
+                         timeout: @timeout }
           redis_opts[:username] = username unless username.nil?
           redis_opts[:password] = password unless password.nil?
           redis_opts[:db] = db unless db.nil?
