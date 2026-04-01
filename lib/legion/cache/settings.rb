@@ -33,7 +33,7 @@ module Legion
           username:           nil,
           password:           nil,
           db:                 nil,
-          reconnect_attempts: 1
+          reconnect_attempts: [0, 0.5, 1].freeze
         }
       end
 
@@ -56,7 +56,7 @@ module Legion
           username:           nil,
           password:           nil,
           db:                 nil,
-          reconnect_attempts: 1
+          reconnect_attempts: [0, 0.25, 0.5].freeze
         }
       end
 
