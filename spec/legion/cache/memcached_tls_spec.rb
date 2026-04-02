@@ -15,6 +15,17 @@ RSpec.describe 'Legion::Cache::Memcached TLS' do
   after { mc_mod.instance_variable_set(:@client, nil) }
 
   describe 'TLS options passed to Dalli::Client' do
+    it 'uses a shared cache logger for Dalli internals' do
+      allow(Legion::Crypt::TLS).to receive(:resolve).and_return(
+        { enabled: false, verify: :peer, ca: nil, cert: nil, key: nil, auto_detected: false }
+      )
+      expect(Dalli).to receive(:logger=).with(an_instance_of(Legion::Logging::TaggedLogger))
+      expect(Dalli::Client).to receive(:new).and_return(double(alive!: true))
+      allow(ConnectionPool).to receive(:new).and_yield
+
+      mc_mod.client
+    end
+
     it 'passes ssl_context when TLS is enabled' do
       allow(Legion::Crypt::TLS).to receive(:resolve).and_return(
         { enabled: true, verify: :peer, ca: '/ca.crt', cert: nil, key: nil, auto_detected: false }

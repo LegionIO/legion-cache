@@ -20,6 +20,7 @@ RSpec.describe Legion::Cache::RedisHash do
         pool = double('ConnectionPool')
         allow(Legion::Cache).to receive(:instance_variable_get).with(:@client).and_return(pool)
         allow(Legion::Cache).to receive(:connected?).and_return(false)
+        allow(Legion::Cache).to receive(:driver_name).and_return('redis')
       end
 
       it 'returns false' do
@@ -27,15 +28,29 @@ RSpec.describe Legion::Cache::RedisHash do
       end
     end
 
-    context 'when the cache is connected' do
+    context 'when the cache is connected on Redis' do
       before do
         pool = double('ConnectionPool')
         allow(Legion::Cache).to receive(:instance_variable_get).with(:@client).and_return(pool)
         allow(Legion::Cache).to receive(:connected?).and_return(true)
+        allow(Legion::Cache).to receive(:driver_name).and_return('redis')
       end
 
       it 'returns true' do
         expect(mod.redis_available?).to be true
+      end
+    end
+
+    context 'when the cache is connected on Memcached' do
+      before do
+        pool = double('ConnectionPool')
+        allow(Legion::Cache).to receive(:instance_variable_get).with(:@client).and_return(pool)
+        allow(Legion::Cache).to receive(:connected?).and_return(true)
+        allow(Legion::Cache).to receive(:driver_name).and_return('dalli')
+      end
+
+      it 'returns false' do
+        expect(mod.redis_available?).to be false
       end
     end
 

@@ -1,8 +1,12 @@
 # frozen_string_literal: true
 
+require 'legion/logging/helper'
+
 module Legion
   module Cache
     module Helper
+      include Legion::Logging::Helper
+
       FALLBACK_TTL = 60
 
       # --- TTL Resolution ---
@@ -12,7 +16,8 @@ module Legion
         return FALLBACK_TTL unless defined?(Legion::Settings)
 
         Legion::Settings.dig(:cache, :default_ttl) || FALLBACK_TTL
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_default_ttl)
         FALLBACK_TTL
       end
 
@@ -20,7 +25,8 @@ module Legion
         return cache_default_ttl unless defined?(Legion::Settings)
 
         Legion::Settings.dig(:cache_local, :default_ttl) || cache_default_ttl
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :local_cache_default_ttl)
         cache_default_ttl
       end
 
@@ -84,13 +90,8 @@ module Legion
 
         effective_ttl = ttl || cache_default_ttl
 
-        if cache_redis?
-          namespaced = hash.transform_keys { |k| cache_namespace + k }
-          Legion::Cache.mset(namespaced)
-        else
-          hash.each { |k, v| Legion::Cache.set(cache_namespace + k, v, effective_ttl) }
-          true
-        end
+        hash.each { |k, v| Legion::Cache.set(cache_namespace + k, v, effective_ttl) }
+        true
       rescue StandardError => e
         log_cache_error('cache_mset', e)
         false
@@ -102,13 +103,7 @@ module Legion
         keys = keys.flatten
         return {} if keys.empty?
 
-        if local_cache_redis?
-          namespaced = keys.map { |k| cache_namespace + k }
-          raw = Legion::Cache::Local.mget(*namespaced)
-          keys.to_h { |k| [k, raw[cache_namespace + k]] }
-        else
-          keys.to_h { |k| [k, Legion::Cache::Local.get(cache_namespace + k)] }
-        end
+        keys.to_h { |k| [k, Legion::Cache::Local.get(cache_namespace + k)] }
       rescue StandardError => e
         log_cache_error('local_cache_mget', e)
         {}
@@ -119,13 +114,8 @@ module Legion
 
         effective_ttl = ttl || local_cache_default_ttl
 
-        if local_cache_redis?
-          namespaced = hash.transform_keys { |k| cache_namespace + k }
-          Legion::Cache::Local.mset(namespaced)
-        else
-          hash.each { |k, v| Legion::Cache::Local.set(cache_namespace + k, v, effective_ttl) }
-          true
-        end
+        hash.each { |k, v| Legion::Cache::Local.set(cache_namespace + k, v, effective_ttl) }
+        true
       rescue StandardError => e
         log_cache_error('local_cache_mset', e)
         false
@@ -251,7 +241,8 @@ module Legion
         return 0 unless cache_connected?
 
         Legion::Cache.pool_size
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_pool_size)
         0
       end
 
@@ -259,7 +250,8 @@ module Legion
         return 0 unless cache_connected?
 
         Legion::Cache.available
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_pool_available)
         0
       end
 
@@ -267,7 +259,8 @@ module Legion
         return 0 unless local_cache_connected?
 
         Legion::Cache::Local.pool_size
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :local_cache_pool_size)
         0
       end
 
@@ -275,7 +268,8 @@ module Legion
         return 0 unless local_cache_connected?
 
         Legion::Cache::Local.available
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :local_cache_pool_available)
         0
       end
 
@@ -310,8 +304,9 @@ module Legion
 
       def local_cache_redis?
         defined?(Legion::Cache::Local) &&
-          Legion::Cache::Local.respond_to?(:mget) &&
-          Legion::Cache::Local.connected?
+          Legion::Cache::Local.connected? &&
+          Legion::Cache::Local.respond_to?(:driver_name) &&
+          Legion::Cache::Local.driver_name == 'redis'
       end
 
       def memcached_hash_merge(full_key, new_fields)
@@ -328,7 +323,8 @@ module Legion
         parsed = Legion::JSON.load(raw)
         # Legion::JSON.load returns symbol keys; convert to string keys to mirror Redis hgetall
         parsed.transform_keys(&:to_s)
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :memcached_hash_load, key: full_key)
         nil
       end
 
@@ -349,9 +345,7 @@ module Legion
       end
 
       def log_cache_error(method, error)
-        return unless defined?(Legion::Logging)
-
-        Legion::Logging.warn "[cache:helper] #{method} failed: #{error.class} — #{error.message}"
+        handle_exception(error, level: :warn, operation: method)
       end
     end
   end

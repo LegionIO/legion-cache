@@ -176,6 +176,32 @@ RSpec.describe Legion::Cache::Settings do
       result = described_class.resolve_servers(driver: 'dalli')
       expect(result).to eq(['127.0.0.1:11211'])
     end
+
+    it 'adds the default port to raw IPv6 hosts' do
+      result = described_class.resolve_servers(driver: 'redis', servers: ['::1'])
+      expect(result).to eq(['[::1]:6379'])
+    end
+
+    it 'adds the default port to bracketed IPv6 hosts without one' do
+      result = described_class.resolve_servers(driver: 'redis', servers: ['[::1]'])
+      expect(result).to eq(['[::1]:6379'])
+    end
+
+    it 'preserves explicit ports for bracketed IPv6 hosts' do
+      result = described_class.resolve_servers(driver: 'redis', servers: ['[::1]:6380'])
+      expect(result).to eq(['[::1]:6380'])
+    end
+  end
+
+  describe '.register_defaults!' do
+    it 'merges both shared and local defaults when Legion::Settings can merge settings' do
+      allow(Legion::Settings).to receive(:merge_settings)
+
+      described_class.register_defaults!
+
+      expect(Legion::Settings).to have_received(:merge_settings).with(:cache, hash_including(namespace: 'legion'))
+      expect(Legion::Settings).to have_received(:merge_settings).with(:cache_local, hash_including(namespace: 'legion_local'))
+    end
   end
 
   describe '.driver' do

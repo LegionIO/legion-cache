@@ -14,12 +14,12 @@ require 'legion/cache/local'
 require 'legion/cache/redis_hash'
 require 'legion/cache/helper'
 
-Legion::Settings.merge_settings('cache', Legion::Cache::Settings.default)
 Legion::Settings.load
 
 RSpec.configure do |config|
   config.example_status_persistence_file_path = '.rspec_status'
   config.disable_monkey_patching!
+  config.filter_run_excluding integration: true unless ENV['RUN_INTEGRATION_SPECS'] == '1'
   config.expect_with :rspec do |c|
     c.syntax = :expect
   end

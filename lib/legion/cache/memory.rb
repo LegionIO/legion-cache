@@ -1,9 +1,12 @@
 # frozen_string_literal: true
 
+require 'legion/logging/helper'
+
 module Legion
   module Cache
     module Memory
       extend self
+      extend Legion::Logging::Helper
 
       @store = {}
       @expiry = {}
@@ -12,6 +15,8 @@ module Legion
 
       def setup(**)
         @connected = true
+        log.info 'Legion::Cache::Memory connected'
+        @connected
       end
 
       def client(**) = self
@@ -23,14 +28,21 @@ module Legion
       def get(key)
         @mutex.synchronize do
           expire_if_needed(key)
-          @store[key]
+          result = @store[key]
+          log.debug { "[cache:memory] GET #{key} hit=#{!result.nil?}" }
+          result
         end
       end
 
       def set(key, value, ttl = nil)
         @mutex.synchronize do
           @store[key] = value
-          @expiry[key] = Time.now + ttl if ttl&.positive?
+          if ttl&.positive?
+            @expiry[key] = Time.now + ttl
+          else
+            @expiry.delete(key)
+          end
+          log.debug { "[cache:memory] SET #{key} ttl=#{ttl.inspect}" }
           value
         end
       end
@@ -39,6 +51,7 @@ module Legion
         val = get(key)
         return val unless val.nil?
 
+        log.debug { "[cache:memory] FETCH #{key} miss=true" }
         val = yield if block_given?
         set(key, val, ttl)
         val
@@ -46,16 +59,20 @@ module Legion
 
       def delete(key)
         @mutex.synchronize do
-          @store.delete(key)
+          removed = @store.delete(key)
           @expiry.delete(key)
+          log.debug { "[cache:memory] DELETE #{key} success=#{!removed.nil?}" }
+          removed
         end
       end
 
       def flush(_delay = 0)
-        @mutex.synchronize do
+        result = @mutex.synchronize do
           @store.clear
           @expiry.clear
         end
+        log.info 'Legion::Cache::Memory flushed'
+        result
       end
 
       def close = nil
@@ -63,14 +80,18 @@ module Legion
       def shutdown
         flush
         @connected = false
+        log.info 'Legion::Cache::Memory shut down'
+        @connected
       end
 
       def reset!
-        @mutex.synchronize do
+        result = @mutex.synchronize do
           @store.clear
           @expiry.clear
           @connected = false
         end
+        log.info 'Legion::Cache::Memory state reset'
+        result
       end
 
       def size = 1
@@ -83,6 +104,7 @@ module Legion
 
         @store.delete(key)
         @expiry.delete(key)
+        log.debug { "[cache:memory] EXPIRE #{key}" }
       end
     end
   end

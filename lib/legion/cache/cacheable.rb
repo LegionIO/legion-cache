@@ -1,10 +1,15 @@
 # frozen_string_literal: true
 
 require 'digest'
+require 'legion/logging/helper'
 
 module Legion
   module Cache
     module Cacheable
+      extend Legion::Logging::Helper
+
+      LOCAL_CACHE_MISS = Object.new
+
       def self.extended(base)
         base.instance_variable_set(:@cached_methods, {})
       end
@@ -29,9 +34,9 @@ module Legion
             unless bypass_local_method_cache
               cached = Legion::Cache::Cacheable.cache_read(key, scope: config[:scope])
               if cached.nil?
-                Legion::Logging.debug "[cacheable] miss key=#{key}" if defined?(Legion::Logging)
+                Legion::Cache::Cacheable.log.debug { "[cacheable] miss key=#{key}" }
               else
-                Legion::Logging.debug "[cacheable] hit key=#{key}" if defined?(Legion::Logging)
+                Legion::Cache::Cacheable.log.debug { "[cacheable] hit key=#{key}" }
                 return cached
               end
             end
@@ -58,7 +63,8 @@ module Legion
 
           memory_read(key)
         else
-          local_cache_read(key) || memory_read(key)
+          result = local_cache_read(key)
+          result.equal?(LOCAL_CACHE_MISS) ? memory_read(key) : result
         end
       end
 
@@ -72,7 +78,8 @@ module Legion
           end
         else
           if local_cache_available?
-            local_cache_write(key, value, ttl)
+            result = local_cache_write(key, value, ttl)
+            memory_write(key, value, ttl) unless result
           else
             memory_write(key, value, ttl)
           end
@@ -88,12 +95,13 @@ module Legion
       end
 
       def self.local_cache_read(key)
-        return nil unless local_cache_available?
+        return LOCAL_CACHE_MISS unless local_cache_available?
 
-        Legion::Cache::Local.get(key)
+        result = Legion::Cache::Local.get(key)
+        result.nil? ? LOCAL_CACHE_MISS : result
       rescue StandardError => e
-        Legion::Logging.warn "[cacheable] local_cache_read failed key=#{key} error=#{e.message}" if defined?(Legion::Logging)
-        nil
+        handle_exception(e, level: :warn, operation: :local_cache_read, key: key)
+        LOCAL_CACHE_MISS
       end
 
       def self.local_cache_write(key, value, ttl)
@@ -101,7 +109,7 @@ module Legion
 
         Legion::Cache::Local.set(key, value, ttl)
       rescue StandardError => e
-        Legion::Logging.warn "[cacheable] local_cache_write failed key=#{key} error=#{e.message}" if defined?(Legion::Logging)
+        handle_exception(e, level: :warn, operation: :local_cache_write, key: key, ttl: ttl)
         nil
       end
 

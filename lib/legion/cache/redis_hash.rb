@@ -1,17 +1,23 @@
 # frozen_string_literal: true
 
+require 'legion/logging/helper'
+
 module Legion
   module Cache
     module RedisHash
+      extend Legion::Logging::Helper
+
       module_function
 
       # Returns true when the Redis driver is loaded and the connection pool is live.
       def redis_available?
         pool = Legion::Cache.instance_variable_get(:@client)
         return false if pool.nil?
+        return false unless Legion::Cache.respond_to?(:driver_name) && Legion::Cache.driver_name == 'redis'
 
         Legion::Cache.connected?
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :redis_hash_available)
         false
       end
 
@@ -24,6 +30,7 @@ module Legion
           flat = hash.flat_map { |k, v| [k.to_s, v.to_s] }
           conn.hset(key, *flat)
         end
+        log.debug "[cache:redis_hash] HSET #{key} fields=#{hash.size}"
         true
       rescue StandardError => e
         log_redis_error('hset', e)
@@ -34,9 +41,11 @@ module Legion
       def hgetall(key)
         return nil unless redis_available?
 
-        Legion::Cache.instance_variable_get(:@client).with do |conn|
+        result = Legion::Cache.instance_variable_get(:@client).with do |conn|
           conn.hgetall(key)
         end
+        log.debug "[cache:redis_hash] HGETALL #{key} fields=#{result.size}"
+        result
       rescue StandardError => e
         log_redis_error('hgetall', e)
         nil
@@ -46,9 +55,11 @@ module Legion
       def hdel(key, *fields)
         return 0 unless redis_available?
 
-        Legion::Cache.instance_variable_get(:@client).with do |conn|
+        result = Legion::Cache.instance_variable_get(:@client).with do |conn|
           conn.hdel(key, *fields)
         end
+        log.debug "[cache:redis_hash] HDEL #{key} fields=#{fields.size} removed=#{result}"
+        result
       rescue StandardError => e
         log_redis_error('hdel', e)
         0
@@ -61,6 +72,7 @@ module Legion
         Legion::Cache.instance_variable_get(:@client).with do |conn|
           conn.zadd(key, score.to_f, member.to_s)
         end
+        log.debug "[cache:redis_hash] ZADD #{key} member=#{member}"
         true
       rescue StandardError => e
         log_redis_error('zadd', e)
@@ -75,9 +87,11 @@ module Legion
         opts = {}
         opts[:limit] = limit if limit
 
-        Legion::Cache.instance_variable_get(:@client).with do |conn|
+        result = Legion::Cache.instance_variable_get(:@client).with do |conn|
           conn.zrangebyscore(key, min, max, **opts)
         end
+        log.debug "[cache:redis_hash] ZRANGEBYSCORE #{key} results=#{result.size}"
+        result
       rescue StandardError => e
         log_redis_error('zrangebyscore', e)
         []
@@ -90,6 +104,7 @@ module Legion
         Legion::Cache.instance_variable_get(:@client).with do |conn|
           conn.zrem(key, member.to_s)
         end
+        log.debug "[cache:redis_hash] ZREM #{key} member=#{member}"
         true
       rescue StandardError => e
         log_redis_error('zrem', e)
@@ -100,18 +115,18 @@ module Legion
       def expire(key, seconds)
         return false unless redis_available?
 
-        Legion::Cache.instance_variable_get(:@client).with do |conn|
+        result = Legion::Cache.instance_variable_get(:@client).with do |conn|
           conn.expire(key, seconds.to_i) == 1
         end
+        log.debug "[cache:redis_hash] EXPIRE #{key} seconds=#{seconds} success=#{result}"
+        result
       rescue StandardError => e
         log_redis_error('expire', e)
         false
       end
 
       def log_redis_error(method, error)
-        return unless defined?(Legion::Logging)
-
-        Legion::Logging.warn "[cache:redis_hash] #{method} failed: #{error.class} — #{error.message}"
+        handle_exception(error, level: :warn, handled: true, operation: method)
       end
     end
   end

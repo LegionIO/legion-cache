@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
+require 'spec_helper'
 require 'legion/cache/redis'
 
-RSpec.describe Legion::Cache::Redis do
+RSpec.describe Legion::Cache::Redis, :integration do
   before(:all) do
     @cache = Legion::Cache::Redis
   end

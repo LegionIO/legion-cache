@@ -28,7 +28,7 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency 'connection_pool', '>= 2.4'
   spec.add_dependency 'dalli', '>= 3.0'
-  spec.add_dependency 'legion-logging', '>= 1.2.8'
+  spec.add_dependency 'legion-logging', '>= 1.5.0'
   spec.add_dependency 'legion-settings', '>= 1.3.12'
   spec.add_dependency 'redis', '>= 5.0'
 end

@@ -21,6 +21,14 @@ RSpec.describe Legion::Cache::Memory do
       sleep 0.15
       expect(described_class.get('expire-me')).to be_nil
     end
+
+    it 'clears stale expiry when a key is rewritten without TTL' do
+      described_class.set('refresh-me', 'old', 0.05)
+      described_class.set('refresh-me', 'new')
+      sleep 0.06
+
+      expect(described_class.get('refresh-me')).to eq('new')
+    end
   end
 
   describe '.delete' do

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [1.3.21] - 2026-04-02
+
+### Fixed
+- Preserve `fetch` block behavior across shared, local, memory, and Redis cache paths; local-cache failures now fall back to the in-process cache and cached `false` values are retained correctly
+- Move shared adapter selection to runtime setup/client calls, register cache defaults through `Legion::Cache::Settings`, and normalize IPv4/hostname/IPv6 server addresses consistently
+- Restrict Redis hash/sorted-set helpers to the actual Redis backend and enforce documented TTL behavior for helper batch writes
+- Make the default `bundle exec rspec` suite hermetic by excluding service-backed integration specs unless `RUN_INTEGRATION_SPECS=1`
+
+### Changed
+- Uplift cache logging internals to `Legion::Logging::Helper`, replacing direct logger calls with helper-provided `log` usage across cache runtime modules
+- Route rescued cache adapter/helper/setup failures through `handle_exception` and expand runtime `info`/`debug`/`error` coverage for shared, local, memory, pool, and RedisHash flows
+- Require `legion-logging >= 1.5.0` at runtime so helper exception handling is always available
+
 ## [1.3.20] - 2026-03-31
 
 ### Fixed

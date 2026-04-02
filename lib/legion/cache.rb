@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'legion/logging/helper'
 require 'legion/cache/version'
 require 'legion/cache/settings'
 require 'legion/cache/cacheable'
@@ -13,13 +14,22 @@ require 'legion/cache/helper'
 
 module Legion
   module Cache
-    if Legion::Cache::Settings.normalize_driver(Legion::Settings[:cache][:driver]) == 'redis'
-      extend Legion::Cache::Redis
-    else
-      extend Legion::Cache::Memcached
-    end
+    extend Legion::Logging::Helper
 
     class << self
+      include Legion::Logging::Helper
+
+      def connected?
+        @connected == true
+      end
+
+      def driver_name
+        return 'memory' if @using_memory
+        return 'local' if @using_local
+
+        @active_shared_driver || configured_shared_driver
+      end
+
       def setup(**)
         return Legion::Settings[:cache][:connected] = true if connected?
 
@@ -28,16 +38,17 @@ module Legion
           @using_memory = true
           @connected = true
           Legion::Settings[:cache][:connected] = true
-          Legion::Logging.info 'Legion::Cache using in-memory adapter (lite mode)' if defined?(Legion::Logging)
+          log.info 'Legion::Cache using in-memory adapter (lite mode)'
           return
         end
 
+        log.debug { "Legion::Cache setup driver=#{Legion::Settings[:cache][:driver]} servers=#{Array(Legion::Settings[:cache][:servers]).size}" }
         setup_local
         setup_shared(**)
       end
 
       def shutdown
-        Legion::Logging.info 'Shutting down Legion::Cache'
+        log.info 'Shutting down Legion::Cache'
         if @using_memory
           Legion::Cache::Memory.shutdown
         else
@@ -58,10 +69,39 @@ module Legion
         @using_local == true
       end
 
+      def using_memory?
+        @using_memory == true
+      end
+
+      def client(**opts)
+        if ENV['LEGION_MODE'] == 'lite'
+          Legion::Cache::Memory.setup unless Legion::Cache::Memory.connected?
+          @using_memory = true
+          @using_local = false
+          @connected = true
+          @active_shared_driver = nil
+          Legion::Settings[:cache][:connected] = true if defined?(Legion::Settings)
+          return Legion::Cache::Memory.client
+        end
+
+        configure_shared_adapter!(opts[:driver])
+        @using_memory = false
+        @using_local = false
+        result = super
+        @connected = true
+        Legion::Settings[:cache][:connected] = true if defined?(Legion::Settings)
+        result
+      rescue StandardError
+        @connected = false
+        Legion::Settings[:cache][:connected] = false if defined?(Legion::Settings)
+        raise
+      end
+
       def get(key)
         return Legion::Cache::Memory.get(key) if @using_memory
         return Legion::Cache::Local.get(key) if @using_local
 
+        configure_shared_adapter!
         super
       end
 
@@ -69,7 +109,8 @@ module Legion
         return 3600 unless defined?(Legion::Settings)
 
         Legion::Settings.dig(:cache, :compliance, :phi_max_ttl) || 3600
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_phi_max_ttl)
         3600
       end
 
@@ -86,13 +127,15 @@ module Legion
         return Legion::Cache::Memory.set(key, value, effective_ttl) if @using_memory
         return Legion::Cache::Local.set(key, value, effective_ttl) if @using_local
 
+        configure_shared_adapter!
         super(key, value, effective_ttl)
       end
 
-      def fetch(key, ttl = nil)
-        return Legion::Cache::Memory.fetch(key, ttl) if @using_memory
-        return Legion::Cache::Local.fetch(key, ttl) if @using_local
+      def fetch(key, ttl = nil, &)
+        return Legion::Cache::Memory.fetch(key, ttl, &) if @using_memory
+        return Legion::Cache::Local.fetch(key, ttl, &) if @using_local
 
+        configure_shared_adapter!
         super
       end
 
@@ -100,6 +143,7 @@ module Legion
         return Legion::Cache::Memory.delete(key) if @using_memory
         return Legion::Cache::Local.delete(key) if @using_local
 
+        configure_shared_adapter!
         super
       end
 
@@ -107,6 +151,94 @@ module Legion
         return Legion::Cache::Memory.flush(delay) if @using_memory
         return Legion::Cache::Local.flush(delay) if @using_local
 
+        configure_shared_adapter!
+        super
+      end
+
+      def mget(*keys)
+        keys = keys.flatten
+        return {} if keys.empty?
+        return keys.to_h { |key| [key, Legion::Cache::Memory.get(key)] } if @using_memory
+        return local_mget(*keys) if @using_local
+
+        configure_shared_adapter!
+        super
+      end
+
+      def mset(hash)
+        return true if hash.empty?
+        return hash.each { |key, value| Legion::Cache::Memory.set(key, value) } && true if @using_memory
+        return local_mset(hash) if @using_local
+
+        configure_shared_adapter!
+        super
+      end
+
+      def close
+        if @using_memory
+          Legion::Cache::Memory.shutdown
+          @using_memory = false
+          @connected = false
+          Legion::Settings[:cache][:connected] = false if defined?(Legion::Settings)
+          return false
+        end
+
+        if @using_local
+          Legion::Cache::Local.close
+          @using_local = false
+          @connected = false
+          Legion::Settings[:cache][:connected] = false if defined?(Legion::Settings)
+          return false
+        end
+
+        return false unless instance_variable_defined?(:@client) && @client
+
+        configure_shared_adapter!
+        result = super
+        @connected = false
+        Legion::Settings[:cache][:connected] = false if defined?(Legion::Settings)
+        result
+      end
+
+      def restart(**opts)
+        configure_shared_adapter!(opts[:driver])
+        @using_memory = false
+        @using_local = false
+        result = super
+        @connected = true
+        Legion::Settings[:cache][:connected] = true if defined?(Legion::Settings)
+        result
+      end
+
+      def size
+        return Legion::Cache::Memory.size if @using_memory
+        return Legion::Cache::Local.size if @using_local
+
+        configure_shared_adapter!
+        super
+      end
+
+      def available
+        return Legion::Cache::Memory.available if @using_memory
+        return Legion::Cache::Local.available if @using_local
+
+        configure_shared_adapter!
+        super
+      end
+
+      def pool_size
+        return Legion::Cache::Memory.size if @using_memory
+        return Legion::Cache::Local.pool_size if @using_local
+
+        configure_shared_adapter!
+        super
+      end
+
+      def timeout
+        return 0 if @using_memory
+        return Legion::Cache::Local.timeout if @using_local
+
+        configure_shared_adapter!
         super
       end
 
@@ -117,29 +249,84 @@ module Legion
 
         Legion::Cache::Local.setup
       rescue StandardError => e
-        Legion::Logging.warn "Local cache setup failed: #{e.message}" if defined?(Legion::Logging)
+        report_exception(e, level: :warn, handled: true, operation: :setup_local)
       end
 
       def setup_shared(**)
-        client(**Legion::Settings[:cache], **)
+        client(**Legion::Settings[:cache], logger: log, **)
         @connected = true
         @using_local = false
         Legion::Settings[:cache][:connected] = true
-        if defined?(Legion::Logging)
-          driver = Legion::Settings[:cache][:driver] || 'dalli'
-          servers = Array(Legion::Settings[:cache][:servers]).join(', ')
-          Legion::Logging.info "Legion::Cache connected (driver=#{driver}) to #{servers}"
-        end
+        driver = Legion::Settings[:cache][:driver] || 'dalli'
+        servers = Array(Legion::Settings[:cache][:servers]).join(', ')
+        log.info "Legion::Cache connected (driver=#{driver}) to #{servers}"
       rescue StandardError => e
-        Legion::Logging.warn "Shared cache unavailable (#{e.message}), falling back to Local" if defined?(Legion::Logging)
+        report_exception(e, level: :warn, handled: true, operation: :setup_shared, fallback: :local)
         if Legion::Cache::Local.connected?
           @using_local = true
           @connected = true
           Legion::Settings[:cache][:connected] = true
+          log.info 'Legion::Cache fell back to Local cache'
         else
           @connected = false
           Legion::Settings[:cache][:connected] = false
+          log.error 'Legion::Cache shared and local adapters are unavailable'
         end
+      end
+
+      def report_exception(exception, level:, handled:, **)
+        handle_exception(exception, level: level, handled: handled, **)
+      end
+
+      def configure_shared_adapter!(requested_driver = nil)
+        driver = Legion::Cache::Settings.normalize_driver(requested_driver || configured_shared_driver)
+        return if @active_shared_driver == driver
+
+        close_existing_shared_client
+        extend build_shared_adapter(driver)
+
+        @active_shared_driver = driver
+        log.info "Legion::Cache selected shared adapter=#{driver}"
+      end
+
+      def configured_shared_driver
+        if defined?(Legion::Settings)
+          Legion::Cache::Settings.normalize_driver(Legion::Settings.dig(:cache, :driver) || Legion::Cache::Settings.driver)
+        else
+          Legion::Cache::Settings.driver
+        end
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_configured_shared_driver)
+        'dalli'
+      end
+
+      def build_shared_adapter(driver)
+        case Legion::Cache::Settings.normalize_driver(driver)
+        when 'redis'
+          Legion::Cache::Redis.dup
+        else
+          Legion::Cache::Memcached.dup
+        end
+      end
+
+      def close_existing_shared_client
+        return unless instance_variable_defined?(:@client) && @client
+
+        @client.shutdown(&:close)
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_close_existing_shared_client)
+      ensure
+        @client = nil
+        @connected = false
+      end
+
+      def local_mget(*keys)
+        keys.to_h { |key| [key, Legion::Cache::Local.get(key)] }
+      end
+
+      def local_mset(hash)
+        hash.each { |key, value| Legion::Cache::Local.set(key, value) }
+        true
       end
     end
   end
