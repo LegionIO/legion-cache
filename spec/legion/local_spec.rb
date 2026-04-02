@@ -80,7 +80,7 @@ RSpec.describe Legion::Cache::Local do
   end
 end
 
-RSpec.describe 'Legion::Cache::Local integration' do
+RSpec.describe 'Legion::Cache::Local integration', :integration do
   before(:all) do
     Legion::Cache::Local.reset!
     Legion::Cache::Local.setup

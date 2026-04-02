@@ -3,7 +3,7 @@
 require 'spec_helper'
 require 'legion/cache/memcached'
 
-RSpec.describe Legion::Cache::Memcached do
+RSpec.describe Legion::Cache::Memcached, :integration do
   before(:all) do
     @cache = Legion::Cache::Memcached
   end
