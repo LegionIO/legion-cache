@@ -34,9 +34,9 @@ module Legion
             unless bypass_local_method_cache
               cached = Legion::Cache::Cacheable.cache_read(key, scope: config[:scope])
               if cached.nil?
-                Legion::Cache::Cacheable.log.debug "[cacheable] miss key=#{key}"
+                Legion::Cache::Cacheable.log.debug { "[cacheable] miss key=#{key}" }
               else
-                Legion::Cache::Cacheable.log.debug "[cacheable] hit key=#{key}"
+                Legion::Cache::Cacheable.log.debug { "[cacheable] hit key=#{key}" }
                 return cached
               end
             end

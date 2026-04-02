@@ -29,7 +29,7 @@ module Legion
         @mutex.synchronize do
           expire_if_needed(key)
           result = @store[key]
-          log.debug "[cache:memory] GET #{key} hit=#{!result.nil?}"
+          log.debug { "[cache:memory] GET #{key} hit=#{!result.nil?}" }
           result
         end
       end
@@ -42,7 +42,7 @@ module Legion
           else
             @expiry.delete(key)
           end
-          log.debug "[cache:memory] SET #{key} ttl=#{ttl.inspect}"
+          log.debug { "[cache:memory] SET #{key} ttl=#{ttl.inspect}" }
           value
         end
       end
@@ -51,7 +51,7 @@ module Legion
         val = get(key)
         return val unless val.nil?
 
-        log.debug "[cache:memory] FETCH #{key} miss=true"
+        log.debug { "[cache:memory] FETCH #{key} miss=true" }
         val = yield if block_given?
         set(key, val, ttl)
         val
@@ -61,7 +61,7 @@ module Legion
         @mutex.synchronize do
           removed = @store.delete(key)
           @expiry.delete(key)
-          log.debug "[cache:memory] DELETE #{key} success=#{!removed.nil?}"
+          log.debug { "[cache:memory] DELETE #{key} success=#{!removed.nil?}" }
           removed
         end
       end
@@ -104,7 +104,7 @@ module Legion
 
         @store.delete(key)
         @expiry.delete(key)
-        log.debug "[cache:memory] EXPIRE #{key}"
+        log.debug { "[cache:memory] EXPIRE #{key}" }
       end
     end
   end
