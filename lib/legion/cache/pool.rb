@@ -30,7 +30,9 @@ module Legion
       end
 
       def close
-        client.shutdown(&:close)
+        return unless @client
+
+        @client.shutdown(&:close)
         @client = nil
         @connected = false
         log.info "#{pool_log_name} pool closed"
