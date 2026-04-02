@@ -99,6 +99,29 @@ module Legion
         raise
       end
 
+      def mget(*keys)
+        keys = keys.flatten
+        return {} if keys.empty?
+
+        result = client.with { |conn| conn.get_multi(*keys) }
+        cache_logger.debug "[cache] MGET keys=#{keys.size} hits=#{result.size}"
+        result
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: false, operation: :memcached_mget, key_count: keys.size)
+        raise
+      end
+
+      def mset(hash)
+        return true if hash.empty?
+
+        client.with { |conn| conn.set_multi(hash) }
+        cache_logger.debug "[cache] MSET keys=#{hash.size}"
+        true
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: false, operation: :memcached_mset, key_count: hash.size)
+        raise
+      end
+
       private
 
       def cache_logger
