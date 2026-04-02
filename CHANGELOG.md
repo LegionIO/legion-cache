@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [1.3.21] - 2026-04-02
+
+### Changed
+- Uplift cache logging internals to `Legion::Logging::Helper`, replacing direct logger calls with helper-provided `log` usage across cache runtime modules
+- Route rescued cache adapter/helper/setup failures through `handle_exception` and expand runtime `info`/`debug`/`error` coverage for shared, local, memory, pool, and RedisHash flows
+- Require `legion-logging >= 1.4.3` at runtime so helper exception handling is always available
+
 ## [1.3.20] - 2026-03-31
 
 ### Fixed
