@@ -74,6 +74,15 @@ RSpec.describe Legion::Cache::Redis, 'cluster mode' do
       result = described_class.build_redis_client(cluster: [nil, nil])
       expect(result).to eq redis_instance
     end
+
+    it 'parses bracketed IPv6 hosts for standalone connections' do
+      redis_instance = instance_double(Redis)
+      allow(Legion::Cache::Settings).to receive(:resolve_servers).and_return(['[::1]:6379'])
+      allow(Redis).to receive(:new).with(hash_including(host: '::1', port: 6379)).and_return(redis_instance)
+
+      result = described_class.build_redis_client(cluster: nil)
+      expect(result).to eq redis_instance
+    end
   end
 
   describe '#cluster_mode?' do
@@ -158,6 +167,24 @@ RSpec.describe Legion::Cache::Redis, 'cluster mode' do
         result = described_class.mget('x', 'y')
         expect(result).to eq({ 'x' => '10', 'y' => '20' })
       end
+    end
+  end
+
+  describe '#fetch' do
+    it 'returns the existing value without writing' do
+      allow(described_class).to receive(:get).with('fetch-key').and_return('cached')
+      expect(described_class).not_to receive(:set)
+      fetch_block = proc { 'computed' }
+
+      expect(described_class.fetch('fetch-key', 60, &fetch_block)).to eq('cached')
+    end
+
+    it 'stores and returns the computed value on miss' do
+      allow(described_class).to receive(:get).with('fetch-key').and_return(nil)
+      expect(described_class).to receive(:set).with('fetch-key', 'computed', 60).and_return(true)
+      fetch_block = proc { 'computed' }
+
+      expect(described_class.fetch('fetch-key', 60, &fetch_block)).to eq('computed')
     end
   end
 

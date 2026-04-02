@@ -103,9 +103,30 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
         expect(described_class.cache_read('local.miss', scope: :local)).to eq('fallback')
       end
 
+      it 'preserves cached false values from Local' do
+        allow(Legion::Cache::Local).to receive(:get).with('local.false').and_return(false)
+        described_class.memory_write('local.false', 'fallback', 60)
+
+        expect(described_class.cache_read('local.false', scope: :local)).to be(false)
+      end
+
+      it 'falls back to memory when Local reads raise' do
+        allow(Legion::Cache::Local).to receive(:get).with('local.error').and_raise(StandardError, 'boom')
+        described_class.memory_write('local.error', 'fallback', 60)
+
+        expect(described_class.cache_read('local.error', scope: :local)).to eq('fallback')
+      end
+
       it 'writes to Local cache' do
         described_class.cache_write('local.w', 'data', ttl: 60, scope: :local)
         expect(Legion::Cache::Local).to have_received(:set).with('local.w', 'data', 60)
+      end
+
+      it 'falls back to memory when Local writes raise' do
+        allow(Legion::Cache::Local).to receive(:set).with('local.error', 'data', 60).and_raise(StandardError, 'boom')
+
+        described_class.cache_write('local.error', 'data', ttl: 60, scope: :local)
+        expect(described_class.memory_read('local.error')).to eq('data')
       end
     end
   end
@@ -201,6 +222,17 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
       b = obj.method_b
       expect(a[:method]).to eq(:a)
       expect(b[:method]).to eq(:b)
+    end
+
+    it 'falls back to memory when the local backend is connected but failing' do
+      allow(Legion::Cache::Cacheable).to receive(:local_cache_available?).and_return(true)
+      allow(Legion::Cache::Local).to receive(:get).and_raise(StandardError, 'read failed')
+      allow(Legion::Cache::Local).to receive(:set).and_raise(StandardError, 'write failed')
+
+      first = instance.fetch_data(user_id: 'alice')
+      second = instance.fetch_data(user_id: 'alice')
+
+      expect(second[:fetched_at]).to eq(first[:fetched_at])
     end
   end
 

@@ -339,18 +339,24 @@ RSpec.describe Legion::Cache::Helper do
     context 'with Redis backend' do
       before { allow(subject).to receive(:cache_redis?).and_return(true) }
 
-      it 'delegates to Legion::Cache.mset with namespaced keys' do
-        expect(Legion::Cache).to receive(:mset).with({ 'microsoft_teams:a' => 'v1', 'microsoft_teams:b' => 'v2' })
+      it 'preserves TTL semantics via sequential set calls' do
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:a', 'v1', 60)
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:b', 'v2', 60)
         subject.cache_mset({ ':a' => 'v1', ':b' => 'v2' })
       end
 
-      it 'returns true for empty hash without calling mset' do
-        expect(Legion::Cache).not_to receive(:mset)
+      it 'uses explicit TTL when provided' do
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:k', 'val', 300)
+        subject.cache_mset({ ':k' => 'val' }, ttl: 300)
+      end
+
+      it 'returns true for empty hash without calling set' do
+        expect(Legion::Cache).not_to receive(:set)
         expect(subject.cache_mset({})).to be true
       end
 
       it 'returns false on error' do
-        allow(Legion::Cache).to receive(:mset).and_raise(StandardError, 'fail')
+        allow(Legion::Cache).to receive(:set).and_raise(StandardError, 'fail')
         expect(subject.cache_mset({ ':x' => 'v' })).to be false
       end
     end
@@ -380,11 +386,10 @@ RSpec.describe Legion::Cache::Helper do
     context 'with Redis local backend' do
       before do
         allow(subject).to receive(:local_cache_redis?).and_return(true)
-        allow(Legion::Cache::Local).to receive(:mget).with('microsoft_teams:a')
-                                                     .and_return({ 'microsoft_teams:a' => 'lv1' })
+        allow(Legion::Cache::Local).to receive(:get).with('microsoft_teams:a').and_return('lv1')
       end
 
-      it 'delegates to Legion::Cache::Local.mget and un-namespaces keys' do
+      it 'uses sequential local gets and un-namespaces keys' do
         expect(subject.local_cache_mget(':a')).to eq({ ':a' => 'lv1' })
       end
     end
@@ -407,8 +412,8 @@ RSpec.describe Legion::Cache::Helper do
     context 'with Redis local backend' do
       before { allow(subject).to receive(:local_cache_redis?).and_return(true) }
 
-      it 'delegates to Legion::Cache::Local.mset with namespaced keys' do
-        expect(Legion::Cache::Local).to receive(:mset).with({ 'microsoft_teams:k' => 'v' })
+      it 'preserves TTL semantics via sequential local set calls' do
+        expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:k', 'v', 60)
         subject.local_cache_mset({ ':k' => 'v' })
       end
     end

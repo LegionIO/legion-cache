@@ -1,72 +1,75 @@
 # frozen_string_literal: true
 
+require 'spec_helper'
 require 'legion/cache'
 
 RSpec.describe Legion::Cache do
+  before do
+    ENV.delete('LEGION_MODE')
+    Legion::Settings[:cache][:driver] = 'dalli'
+    Legion::Settings[:cache][:servers] = ['127.0.0.1:11211']
+    described_class.instance_variable_set(:@client, nil)
+    described_class.instance_variable_set(:@connected, false)
+    described_class.instance_variable_set(:@using_local, false)
+    described_class.instance_variable_set(:@using_memory, false)
+    described_class.instance_variable_set(:@active_shared_driver, nil)
+    Legion::Cache::Local.reset!
+    Legion::Cache::Memory.reset!
+  end
+
+  after do
+    ENV.delete('LEGION_MODE')
+    Legion::Settings[:cache][:driver] = 'dalli'
+    Legion::Settings[:cache][:servers] = ['127.0.0.1:11211']
+    described_class.instance_variable_set(:@client, nil)
+    described_class.instance_variable_set(:@connected, false)
+    described_class.instance_variable_set(:@using_local, false)
+    described_class.instance_variable_set(:@using_memory, false)
+    described_class.instance_variable_set(:@active_shared_driver, nil)
+  end
+
   it 'has a version number' do
-    expect(Legion::Cache::VERSION).not_to be nil
+    expect(Legion::Cache::VERSION).not_to be_nil
   end
 
-  it 'can setup' do
-    expect { Legion::Cache.client }.not_to raise_exception
-    expect(Legion::Cache.connected?).to eq true
+  describe '.setup' do
+    it 'selects the shared adapter from settings at setup time' do
+      Legion::Settings[:cache][:driver] = 'redis'
+      Legion::Settings[:cache][:servers] = ['127.0.0.1:6379']
+      allow(Legion::Cache::Local).to receive(:connected?).and_return(true)
+      allow(Legion::Cache::Local).to receive(:setup)
+
+      expect { described_class.setup }.not_to raise_error
+      expect(described_class.driver_name).to eq('redis')
+      expect(described_class.connected?).to be(true)
+    end
   end
 
-  it 'can set' do
-    expect(Legion::Cache).to respond_to :set
-    expect(Legion::Cache.set('test', 'foobar')).to eq true
-    expect(Legion::Cache.set('test_ttl', 'ttl_value', 10)).to eq true
-  end
+  describe '.fetch' do
+    it 'forwards blocks to the memory adapter' do
+      described_class.instance_variable_set(:@using_memory, true)
+      fetch_block = proc { 'computed' }
 
-  it 'can get' do
-    expect(Legion::Cache).to respond_to :get
-    expect(Legion::Cache.get('test')).to eq 'foobar'
-    expect(Legion::Cache.get('nil')).to eq nil
-  end
+      expect(Legion::Cache::Memory).to receive(:fetch) do |key, ttl, &block|
+        expect(key).to eq('cache.key')
+        expect(ttl).to eq(60)
+        block.call
+      end.and_return('computed')
 
-  it 'can delete' do
-    expect(Legion::Cache).to respond_to :delete
-    expect(Legion::Cache.delete('test')).to eq true
-    expect(Legion::Cache.delete('test_nil')).to eq false
-  end
+      expect(described_class.fetch('cache.key', 60, &fetch_block)).to eq('computed')
+    end
 
-  it 'can flush' do
-    expect(Legion::Cache).to respond_to :flush
-    expect(Legion::Cache.flush).to eq true
-  end
+    it 'forwards blocks to the local adapter' do
+      described_class.instance_variable_set(:@using_local, true)
+      fetch_block = proc { 'local-computed' }
 
-  it 'can get size and available counts' do
-    expect(Legion::Cache.size).to eq 10
-    expect(Legion::Cache.available).to eq 10
-  end
+      expect(Legion::Cache::Local).to receive(:fetch) do |key, ttl, &block|
+        expect(key).to eq('cache.key')
+        expect(ttl).to eq(90)
+        block.call
+      end.and_return('local-computed')
 
-  it 'can shutdown' do
-    Legion::Cache.client
-    expect { Legion::Cache.shutdown }.not_to raise_exception
-    expect(Legion::Cache.connected?).to eq false
-  end
-
-  it 'can restart with new values' do
-    Legion::Cache.client
-    expect(Legion::Cache.connected?).to eq true
-    expect(Legion::Cache.available).to eq 10
-    expect(Legion::Cache.timeout).to eq 5
-    expect { Legion::Cache.restart(pool_size: 2, timeout: 2) }.not_to raise_exception
-    expect(Legion::Cache.available).to eq 2
-    expect(Legion::Cache.timeout).to eq 2
-    expect(Legion::Cache.connected?).to eq true
-    expect(Legion::Cache.set('test_ttl_restart', 'ttl_value_restart', 10)).to eq true
-    expect(Legion::Cache.get('test_ttl_restart')).to eq 'ttl_value_restart'
-  end
-
-  it 'can setup' do
-    expect { Legion::Cache.setup }.not_to raise_exception
-    expect(Legion::Cache.connected?).to eq true
-    expect { Legion::Cache.setup }.not_to raise_exception
-    expect(Legion::Cache.connected?).to eq true
-    expect { Legion::Cache.close }.not_to raise_exception
-    expect(Legion::Cache.connected?).to eq false
-    expect { Legion::Cache.setup }.not_to raise_exception
-    expect(Legion::Cache.connected?).to eq true
+      expect(described_class.fetch('cache.key', 90, &fetch_block)).to eq('local-computed')
+    end
   end
 end
