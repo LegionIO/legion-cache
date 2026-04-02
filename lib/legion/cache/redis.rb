@@ -53,7 +53,7 @@ module Legion
           resolved = Legion::Cache::Settings.resolve_servers(
             driver: 'redis', server: server, servers: servers
           )
-          host, port = resolved.first.split(':')
+          host, port = Legion::Cache::Settings.parse_server_address(resolved.first, default_port: 6379)
           redis_opts = { host: host, port: port.to_i, reconnect_attempts: reconnect_attempts,
                          timeout: @timeout }
           redis_opts[:username] = username unless username.nil?
@@ -76,7 +76,15 @@ module Legion
         log_cluster_error('redis_get', e, key: key)
         raise
       end
-      alias fetch get
+
+      def fetch(key, ttl = nil)
+        result = get(key)
+        return result unless result.nil? && block_given?
+
+        result = yield
+        set(key, result, ttl)
+        result
+      end
 
       def set(key, value, ttl = nil)
         args = {}
@@ -178,7 +186,7 @@ module Legion
         node_info = conn.cluster('nodes')
         primaries = node_info.lines.select { |l| l.include?('master') }.map { |l| l.split[1].split('@').first }
         primaries.each do |addr|
-          host, port = addr.split(':')
+          host, port = Legion::Cache::Settings.parse_server_address(addr, default_port: 6379)
           node = ::Redis.new(host: host, port: port.to_i)
           node.flushdb
           node.close

@@ -37,7 +37,11 @@ module Legion
       def set(key, value, ttl = nil)
         @mutex.synchronize do
           @store[key] = value
-          @expiry[key] = Time.now + ttl if ttl&.positive?
+          if ttl&.positive?
+            @expiry[key] = Time.now + ttl
+          else
+            @expiry.delete(key)
+          end
           log.debug "[cache:memory] SET #{key} ttl=#{ttl.inspect}"
           value
         end

@@ -16,6 +16,7 @@ module Legion
           return unless settings[:enabled]
 
           driver_name = settings[:driver] || Legion::Cache::Settings.driver
+          @driver_name = Legion::Cache::Settings.normalize_driver(driver_name)
           @driver = build_driver(driver_name)
           @driver.client(**settings, logger: log, **)
           @connected = true
@@ -32,11 +33,16 @@ module Legion
           log.info 'Shutting down Legion::Cache::Local'
           @driver&.close
           @driver = nil
+          @driver_name = nil
           @connected = false
         end
 
         def connected?
           @connected == true
+        end
+
+        def driver_name
+          @driver_name || Legion::Cache::Settings.normalize_driver(local_settings[:driver] || Legion::Cache::Settings.driver)
         end
 
         def get(key)
@@ -57,8 +63,8 @@ module Legion
           raise
         end
 
-        def fetch(key, ttl = nil)
-          result = @driver.fetch(key, ttl)
+        def fetch(key, ttl = nil, &)
+          result = @driver.fetch(key, ttl, &)
           log.debug "[cache:local] FETCH #{key} hit=#{!result.nil?}"
           result
         rescue StandardError => e
@@ -90,6 +96,8 @@ module Legion
 
         def close
           @driver&.close
+          @driver = nil
+          @driver_name = nil
           @connected = false
           log.info 'Legion::Cache::Local pool closed'
           @connected
@@ -121,6 +129,7 @@ module Legion
 
         def reset!
           @driver = nil
+          @driver_name = nil
           @connected = false
           log.debug 'Legion::Cache::Local state reset'
           @connected

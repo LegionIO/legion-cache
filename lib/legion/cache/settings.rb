@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'ipaddr'
 require 'legion/logging/helper'
 
 module Legion
@@ -16,8 +17,6 @@ module Legion
                          operation: :cache_settings_require_legion_settings)
       end
 
-      Legion::Settings.merge_settings(:cache, default) if defined?(Legion::Settings) && Legion::Settings.method_defined?(:merge_settings)
-      Legion::Settings.merge_settings(:cache_local, local) if defined?(Legion::Settings) && Legion::Settings.method_defined?(:merge_settings)
       def self.default
         {
           driver:             driver,
@@ -76,10 +75,34 @@ module Legion
         all = Array(servers) + Array(server)
         all = ["127.0.0.1:#{port}"] if all.empty?
 
-        all.map! { |s| s.include?(':') ? s : "#{s}:#{port}" }
+        all.map! { |s| normalize_server(s, port: port) }
         resolved = all.uniq
         log.debug "Legion::Cache::Settings resolved driver=#{gem_driver} servers=#{resolved.join(', ')}"
         resolved
+      end
+
+      def self.parse_server_address(server, default_port:)
+        raw = server.to_s.strip
+        return ['127.0.0.1', default_port] if raw.empty?
+
+        bracketed = raw.match(/\A\[(?<host>[^\]]+)\](?::(?<port>\d+))?\z/)
+        return [bracketed[:host], (bracketed[:port] || default_port).to_i] if bracketed
+
+        return [raw, default_port] if ipv6_literal?(raw)
+
+        host, explicit_port = raw.split(':', 2)
+        if explicit_port&.match?(/\A\d+\z/)
+          [host, explicit_port.to_i]
+        else
+          [raw, default_port]
+        end
+      end
+
+      def self.register_defaults!
+        return unless defined?(Legion::Settings) && Legion::Settings.respond_to?(:merge_settings)
+
+        Legion::Settings.merge_settings(:cache, default)
+        Legion::Settings.merge_settings(:cache_local, local)
       end
 
       def self.normalize_driver(name)
@@ -104,6 +127,25 @@ module Legion
           raise error
         end
       end
+
+      def self.normalize_server(server, port:)
+        host, resolved_port = parse_server_address(server, default_port: port)
+        format_server(host, resolved_port)
+      end
+
+      def self.format_server(host, port)
+        return "[#{host}]:#{port}" if ipv6_literal?(host)
+
+        "#{host}:#{port}"
+      end
+
+      def self.ipv6_literal?(value)
+        IPAddr.new(value).ipv6?
+      rescue IPAddr::InvalidAddressError
+        false
+      end
+
+      register_defaults!
     end
   end
 end

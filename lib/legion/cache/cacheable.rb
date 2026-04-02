@@ -8,6 +8,8 @@ module Legion
     module Cacheable
       extend Legion::Logging::Helper
 
+      LOCAL_CACHE_MISS = Object.new
+
       def self.extended(base)
         base.instance_variable_set(:@cached_methods, {})
       end
@@ -61,7 +63,8 @@ module Legion
 
           memory_read(key)
         else
-          local_cache_read(key) || memory_read(key)
+          result = local_cache_read(key)
+          result.equal?(LOCAL_CACHE_MISS) ? memory_read(key) : result
         end
       end
 
@@ -75,7 +78,8 @@ module Legion
           end
         else
           if local_cache_available?
-            local_cache_write(key, value, ttl)
+            result = local_cache_write(key, value, ttl)
+            memory_write(key, value, ttl) unless result
           else
             memory_write(key, value, ttl)
           end
@@ -91,12 +95,13 @@ module Legion
       end
 
       def self.local_cache_read(key)
-        return nil unless local_cache_available?
+        return LOCAL_CACHE_MISS unless local_cache_available?
 
-        Legion::Cache::Local.get(key)
+        result = Legion::Cache::Local.get(key)
+        result.nil? ? LOCAL_CACHE_MISS : result
       rescue StandardError => e
         handle_exception(e, level: :warn, operation: :local_cache_read, key: key)
-        nil
+        LOCAL_CACHE_MISS
       end
 
       def self.local_cache_write(key, value, ttl)

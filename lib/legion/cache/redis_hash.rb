@@ -13,6 +13,7 @@ module Legion
       def redis_available?
         pool = Legion::Cache.instance_variable_get(:@client)
         return false if pool.nil?
+        return false unless Legion::Cache.respond_to?(:driver_name) && Legion::Cache.driver_name == 'redis'
 
         Legion::Cache.connected?
       rescue StandardError => e

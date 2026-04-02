@@ -57,8 +57,14 @@ module Legion
         raise
       end
 
-      def fetch(key, ttl = nil)
-        result = client.with { |conn| conn.fetch(key, ttl) }
+      def fetch(key, ttl = nil, &)
+        result = client.with do |conn|
+          if block_given?
+            conn.fetch(key, ttl, &)
+          else
+            conn.fetch(key, ttl)
+          end
+        end
         cache_logger.debug "[cache] FETCH #{key} hit=#{!result.nil?}"
         result
       rescue StandardError => e
