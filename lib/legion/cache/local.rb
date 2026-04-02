@@ -1,11 +1,14 @@
 # frozen_string_literal: true
 
+require 'legion/logging/helper'
 require 'legion/cache/settings'
 
 module Legion
   module Cache
     module Local
       class << self
+        include Legion::Logging::Helper
+
         def setup(**)
           return if @connected
 
@@ -14,19 +17,19 @@ module Legion
 
           driver_name = settings[:driver] || Legion::Cache::Settings.driver
           @driver = build_driver(driver_name)
-          @driver.client(**settings, **)
+          @driver.client(**settings, logger: log, **)
           @connected = true
           servers = Array(settings[:servers]).join(', ')
-          Legion::Logging.info "Legion::Cache::Local connected (#{driver_name}) to #{servers}" if defined?(Legion::Logging)
+          log.info "Legion::Cache::Local connected (#{driver_name}) to #{servers}"
         rescue StandardError => e
-          Legion::Logging.warn "Legion::Cache::Local setup failed: #{e.message}" if defined?(Legion::Logging)
+          handle_exception(e, level: :warn, handled: true, operation: :cache_local_setup, driver: driver_name)
           @connected = false
         end
 
         def shutdown
           return unless @connected
 
-          Legion::Logging.info 'Shutting down Legion::Cache::Local' if defined?(Legion::Logging)
+          log.info 'Shutting down Legion::Cache::Local'
           @driver&.close
           @driver = nil
           @connected = false
@@ -38,32 +41,47 @@ module Legion
 
         def get(key)
           result = @driver.get(key)
-          Legion::Logging.debug "[cache:local] GET #{key} hit=#{!result.nil?}" if defined?(Legion::Logging)
+          log.debug "[cache:local] GET #{key} hit=#{!result.nil?}"
           result
+        rescue StandardError => e
+          handle_exception(e, level: :warn, handled: false, operation: :cache_local_get, key: key)
+          raise
         end
 
         def set(key, value, ttl = 180)
           result = @driver.set(key, value, ttl)
-          Legion::Logging.debug "[cache:local] SET #{key} ttl=#{ttl} success=#{result}" if defined?(Legion::Logging)
+          log.debug "[cache:local] SET #{key} ttl=#{ttl} success=#{result}"
           result
+        rescue StandardError => e
+          handle_exception(e, level: :warn, handled: false, operation: :cache_local_set, key: key, ttl: ttl)
+          raise
         end
 
         def fetch(key, ttl = nil)
           result = @driver.fetch(key, ttl)
-          Legion::Logging.debug "[cache:local] FETCH #{key} hit=#{!result.nil?}" if defined?(Legion::Logging)
+          log.debug "[cache:local] FETCH #{key} hit=#{!result.nil?}"
           result
+        rescue StandardError => e
+          handle_exception(e, level: :warn, handled: false, operation: :cache_local_fetch, key: key, ttl: ttl)
+          raise
         end
 
         def delete(key)
           result = @driver.delete(key)
-          Legion::Logging.debug "[cache:local] DELETE #{key} success=#{result}" if defined?(Legion::Logging)
+          log.debug "[cache:local] DELETE #{key} success=#{result}"
           result
+        rescue StandardError => e
+          handle_exception(e, level: :warn, handled: false, operation: :cache_local_delete, key: key)
+          raise
         end
 
         def flush(delay = 0)
           result = @driver.flush(delay)
-          Legion::Logging.debug '[cache:local] FLUSH completed' if defined?(Legion::Logging)
+          log.debug '[cache:local] FLUSH completed'
           result
+        rescue StandardError => e
+          handle_exception(e, level: :warn, handled: false, operation: :cache_local_flush, delay: delay)
+          raise
         end
 
         def client
@@ -73,12 +91,16 @@ module Legion
         def close
           @driver&.close
           @connected = false
+          log.info 'Legion::Cache::Local pool closed'
+          @connected
         end
 
         def restart(**opts)
           settings = local_settings
-          @driver&.restart(**settings.merge(opts))
+          @driver&.restart(**settings.merge(opts, logger: log))
           @connected = true
+          log.info 'Legion::Cache::Local pool restarted'
+          @connected
         end
 
         def size
@@ -100,6 +122,8 @@ module Legion
         def reset!
           @driver = nil
           @connected = false
+          log.debug 'Legion::Cache::Local state reset'
+          @connected
         end
 
         private

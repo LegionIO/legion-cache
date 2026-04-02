@@ -1,10 +1,13 @@
 # frozen_string_literal: true
 
 require 'digest'
+require 'legion/logging/helper'
 
 module Legion
   module Cache
     module Cacheable
+      extend Legion::Logging::Helper
+
       def self.extended(base)
         base.instance_variable_set(:@cached_methods, {})
       end
@@ -29,9 +32,9 @@ module Legion
             unless bypass_local_method_cache
               cached = Legion::Cache::Cacheable.cache_read(key, scope: config[:scope])
               if cached.nil?
-                Legion::Logging.debug "[cacheable] miss key=#{key}" if defined?(Legion::Logging)
+                Legion::Cache::Cacheable.log.debug "[cacheable] miss key=#{key}"
               else
-                Legion::Logging.debug "[cacheable] hit key=#{key}" if defined?(Legion::Logging)
+                Legion::Cache::Cacheable.log.debug "[cacheable] hit key=#{key}"
                 return cached
               end
             end
@@ -92,7 +95,7 @@ module Legion
 
         Legion::Cache::Local.get(key)
       rescue StandardError => e
-        Legion::Logging.warn "[cacheable] local_cache_read failed key=#{key} error=#{e.message}" if defined?(Legion::Logging)
+        handle_exception(e, level: :warn, operation: :local_cache_read, key: key)
         nil
       end
 
@@ -101,7 +104,7 @@ module Legion
 
         Legion::Cache::Local.set(key, value, ttl)
       rescue StandardError => e
-        Legion::Logging.warn "[cacheable] local_cache_write failed key=#{key} error=#{e.message}" if defined?(Legion::Logging)
+        handle_exception(e, level: :warn, operation: :local_cache_write, key: key, ttl: ttl)
         nil
       end
 

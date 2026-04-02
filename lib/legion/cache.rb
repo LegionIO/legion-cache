@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'legion/logging/helper'
 require 'legion/cache/version'
 require 'legion/cache/settings'
 require 'legion/cache/cacheable'
@@ -13,6 +14,8 @@ require 'legion/cache/helper'
 
 module Legion
   module Cache
+    extend Legion::Logging::Helper
+
     if Legion::Cache::Settings.normalize_driver(Legion::Settings[:cache][:driver]) == 'redis'
       extend Legion::Cache::Redis
     else
@@ -20,6 +23,8 @@ module Legion
     end
 
     class << self
+      include Legion::Logging::Helper
+
       def setup(**)
         return Legion::Settings[:cache][:connected] = true if connected?
 
@@ -28,16 +33,17 @@ module Legion
           @using_memory = true
           @connected = true
           Legion::Settings[:cache][:connected] = true
-          Legion::Logging.info 'Legion::Cache using in-memory adapter (lite mode)' if defined?(Legion::Logging)
+          log.info 'Legion::Cache using in-memory adapter (lite mode)'
           return
         end
 
+        log.debug { "Legion::Cache setup driver=#{Legion::Settings[:cache][:driver]} servers=#{Array(Legion::Settings[:cache][:servers]).size}" }
         setup_local
         setup_shared(**)
       end
 
       def shutdown
-        Legion::Logging.info 'Shutting down Legion::Cache'
+        log.info 'Shutting down Legion::Cache'
         if @using_memory
           Legion::Cache::Memory.shutdown
         else
@@ -69,7 +75,8 @@ module Legion
         return 3600 unless defined?(Legion::Settings)
 
         Legion::Settings.dig(:cache, :compliance, :phi_max_ttl) || 3600
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_phi_max_ttl)
         3600
       end
 
@@ -117,29 +124,33 @@ module Legion
 
         Legion::Cache::Local.setup
       rescue StandardError => e
-        Legion::Logging.warn "Local cache setup failed: #{e.message}" if defined?(Legion::Logging)
+        report_exception(e, level: :warn, handled: true, operation: :setup_local)
       end
 
       def setup_shared(**)
-        client(**Legion::Settings[:cache], **)
+        client(**Legion::Settings[:cache], logger: log, **)
         @connected = true
         @using_local = false
         Legion::Settings[:cache][:connected] = true
-        if defined?(Legion::Logging)
-          driver = Legion::Settings[:cache][:driver] || 'dalli'
-          servers = Array(Legion::Settings[:cache][:servers]).join(', ')
-          Legion::Logging.info "Legion::Cache connected (driver=#{driver}) to #{servers}"
-        end
+        driver = Legion::Settings[:cache][:driver] || 'dalli'
+        servers = Array(Legion::Settings[:cache][:servers]).join(', ')
+        log.info "Legion::Cache connected (driver=#{driver}) to #{servers}"
       rescue StandardError => e
-        Legion::Logging.warn "Shared cache unavailable (#{e.message}), falling back to Local" if defined?(Legion::Logging)
+        report_exception(e, level: :warn, handled: true, operation: :setup_shared, fallback: :local)
         if Legion::Cache::Local.connected?
           @using_local = true
           @connected = true
           Legion::Settings[:cache][:connected] = true
+          log.info 'Legion::Cache fell back to Local cache'
         else
           @connected = false
           Legion::Settings[:cache][:connected] = false
+          log.error 'Legion::Cache shared and local adapters are unavailable'
         end
+      end
+
+      def report_exception(exception, level:, handled:, **)
+        handle_exception(exception, level: level, handled: handled, **)
       end
     end
   end

@@ -1,8 +1,12 @@
 # frozen_string_literal: true
 
+require 'legion/logging/helper'
+
 module Legion
   module Cache
     module Helper
+      include Legion::Logging::Helper
+
       FALLBACK_TTL = 60
 
       # --- TTL Resolution ---
@@ -12,7 +16,8 @@ module Legion
         return FALLBACK_TTL unless defined?(Legion::Settings)
 
         Legion::Settings.dig(:cache, :default_ttl) || FALLBACK_TTL
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_default_ttl)
         FALLBACK_TTL
       end
 
@@ -20,7 +25,8 @@ module Legion
         return cache_default_ttl unless defined?(Legion::Settings)
 
         Legion::Settings.dig(:cache_local, :default_ttl) || cache_default_ttl
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :local_cache_default_ttl)
         cache_default_ttl
       end
 
@@ -251,7 +257,8 @@ module Legion
         return 0 unless cache_connected?
 
         Legion::Cache.pool_size
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_pool_size)
         0
       end
 
@@ -259,7 +266,8 @@ module Legion
         return 0 unless cache_connected?
 
         Legion::Cache.available
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_pool_available)
         0
       end
 
@@ -267,7 +275,8 @@ module Legion
         return 0 unless local_cache_connected?
 
         Legion::Cache::Local.pool_size
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :local_cache_pool_size)
         0
       end
 
@@ -275,7 +284,8 @@ module Legion
         return 0 unless local_cache_connected?
 
         Legion::Cache::Local.available
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :local_cache_pool_available)
         0
       end
 
@@ -328,7 +338,8 @@ module Legion
         parsed = Legion::JSON.load(raw)
         # Legion::JSON.load returns symbol keys; convert to string keys to mirror Redis hgetall
         parsed.transform_keys(&:to_s)
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :memcached_hash_load, key: full_key)
         nil
       end
 
@@ -349,9 +360,7 @@ module Legion
       end
 
       def log_cache_error(method, error)
-        return unless defined?(Legion::Logging)
-
-        Legion::Logging.warn "[cache:helper] #{method} failed: #{error.class} — #{error.message}"
+        handle_exception(error, level: :warn, operation: method)
       end
     end
   end

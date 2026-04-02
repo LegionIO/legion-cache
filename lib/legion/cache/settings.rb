@@ -1,16 +1,23 @@
 # frozen_string_literal: true
 
-begin
-  require 'legion/settings'
-rescue StandardError => e
-  warn "legion-cache: failed to require legion/settings: #{e.message}"
-end
+require 'legion/logging/helper'
 
 module Legion
   module Cache
     module Settings
-      Legion::Settings.merge_settings(:cache, default) if Legion::Settings.method_defined? :merge_settings
-      Legion::Settings.merge_settings(:cache_local, local) if Legion::Settings.method_defined? :merge_settings
+      extend Legion::Logging::Helper
+
+      begin
+        require 'legion/settings'
+      rescue StandardError => e
+        handle_exception(e,
+                         level:     :error,
+                         handled:   true,
+                         operation: :cache_settings_require_legion_settings)
+      end
+
+      Legion::Settings.merge_settings(:cache, default) if defined?(Legion::Settings) && Legion::Settings.method_defined?(:merge_settings)
+      Legion::Settings.merge_settings(:cache_local, local) if defined?(Legion::Settings) && Legion::Settings.method_defined?(:merge_settings)
       def self.default
         {
           driver:             driver,
@@ -70,7 +77,9 @@ module Legion
         all = ["127.0.0.1:#{port}"] if all.empty?
 
         all.map! { |s| s.include?(':') ? s : "#{s}:#{port}" }
-        all.uniq
+        resolved = all.uniq
+        log.debug "Legion::Cache::Settings resolved driver=#{gem_driver} servers=#{resolved.join(', ')}"
+        resolved
       end
 
       def self.normalize_driver(name)
@@ -84,11 +93,15 @@ module Legion
       def self.driver(prefer = 'dalli')
         secondary = prefer == 'dalli' ? 'redis' : 'dalli'
         if Gem::Specification.find_all_by_name(prefer).any?
+          log.debug "Legion::Cache::Settings selected driver=#{prefer}"
           prefer
         elsif Gem::Specification.find_all_by_name(secondary).any?
+          log.info "Legion::Cache::Settings falling back driver=#{secondary} preferred=#{prefer}"
           secondary
         else
-          raise NameError('Legion::Cache.driver is nil')
+          error = NameError.new('Legion::Cache.driver is nil')
+          handle_exception(error, level: :error, handled: false, operation: :cache_settings_driver, preferred: prefer)
+          raise error
         end
       end
     end

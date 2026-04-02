@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
 require 'connection_pool'
+require 'legion/logging/helper'
 
 module Legion
   module Cache
     module Pool
-      extend self # rubocop:disable Style/ModuleFunction
+      extend self
+      extend Legion::Logging::Helper
 
       def connected?
         @connected ||= false
@@ -31,7 +33,7 @@ module Legion
         client.shutdown(&:close)
         @client = nil
         @connected = false
-        Legion::Logging.info "#{name} pool closed" if defined?(Legion::Logging)
+        log.info "#{pool_log_name} pool closed"
       end
 
       def restart(**opts)
@@ -42,7 +44,26 @@ module Legion
         client_hash[:timeout] = opts[:timeout] if opts.key? :timeout
         client(**client_hash)
         @connected = true
-        Legion::Logging.info "#{name} pool restarted" if defined?(Legion::Logging)
+        log.info "#{pool_log_name} pool restarted"
+      end
+
+      private
+
+      def pool_log_name
+        if respond_to?(:name)
+          label = name.to_s
+          return label unless label.empty? || label.start_with?('#<')
+        end
+
+        segments = if instance_variable_defined?(:@component_logger) && @component_logger.respond_to?(:segments)
+                     Array(@component_logger.segments)
+                   elsif log.respond_to?(:segments)
+                     Array(log.segments)
+                   else
+                     []
+                   end
+
+        segments.empty? ? 'cache.pool' : segments.join('.')
       end
     end
   end

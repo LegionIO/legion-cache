@@ -2,6 +2,7 @@
 
 require 'openssl'
 require 'redis'
+require 'legion/logging/helper'
 require 'legion/cache/pool'
 require 'legion/cache/settings'
 
@@ -10,14 +11,17 @@ module Legion
     module Redis
       include Legion::Cache::Pool
       extend self
+      extend Legion::Logging::Helper
 
       def client(pool_size: 20, timeout: 5, server: nil, servers: [], cluster: nil, replica: false, # rubocop:disable Metrics/ParameterLists
+                 logger: nil,
                  fixed_hostname: nil, username: nil, password: nil, db: nil, reconnect_attempts: [0, 0.5, 1], **)
         return @client unless @client.nil?
 
         @pool_size = pool_size
         @timeout   = timeout
         @cluster_mode = Array(cluster).compact.any?
+        @component_logger = logger || log
 
         @client = ConnectionPool.new(size: pool_size, timeout: timeout) do
           build_redis_client(server: server, servers: servers, cluster: cluster,
@@ -26,8 +30,13 @@ module Legion
                              reconnect_attempts: reconnect_attempts)
         end
         @connected = true
-        Legion::Logging.info "Redis connected to #{resolved_redis_address(server: server, servers: servers, cluster: cluster)}" if defined?(Legion::Logging)
+        cache_logger.info "Redis connected to #{resolved_redis_address(server: server, servers: servers, cluster: cluster)}"
         @client
+      rescue StandardError => e
+        handle_exception(e, level: :error, handled: false, operation: :redis_client,
+                            server: server, servers: Array(servers), cluster_nodes: Array(cluster))
+        @connected = false
+        raise
       end
 
       def build_redis_client(server: nil, servers: [], cluster: nil, replica: false, fixed_hostname: nil, # rubocop:disable Metrics/ParameterLists
@@ -61,10 +70,10 @@ module Legion
 
       def get(key)
         result = client.with { |conn| conn.get(key) }
-        Legion::Logging.debug "[cache] GET #{key} hit=#{!result.nil?}" if defined?(Legion::Logging)
+        cache_logger.debug "[cache] GET #{key} hit=#{!result.nil?}"
         result
       rescue ::Redis::BaseError => e
-        log_cluster_error(e)
+        log_cluster_error('redis_get', e, key: key)
         raise
       end
       alias fetch get
@@ -73,19 +82,19 @@ module Legion
         args = {}
         args[:ex] = ttl unless ttl.nil?
         result = client.with { |conn| conn.set(key, value, **args) == 'OK' }
-        Legion::Logging.debug "[cache] SET #{key} ttl=#{ttl.inspect} success=#{result}" if defined?(Legion::Logging)
+        cache_logger.debug "[cache] SET #{key} ttl=#{ttl.inspect} success=#{result}"
         result
       rescue ::Redis::BaseError => e
-        log_cluster_error(e)
+        log_cluster_error('redis_set', e, key: key, ttl: ttl)
         raise
       end
 
       def delete(key)
         result = client.with { |conn| conn.del(key) == 1 }
-        Legion::Logging.debug "[cache] DELETE #{key} success=#{result}" if defined?(Legion::Logging)
+        cache_logger.debug "[cache] DELETE #{key} success=#{result}"
         result
       rescue ::Redis::BaseError => e
-        log_cluster_error(e)
+        log_cluster_error('redis_delete', e, key: key)
         raise
       end
 
@@ -97,10 +106,10 @@ module Legion
             conn.flushdb == 'OK'
           end
         end
-        Legion::Logging.debug '[cache] FLUSH completed' if defined?(Legion::Logging)
+        cache_logger.debug '[cache] FLUSH completed'
         result
       rescue ::Redis::BaseError => e
-        log_cluster_error(e)
+        log_cluster_error('redis_flush', e)
         raise
       end
 
@@ -116,10 +125,10 @@ module Legion
             keys.zip(values).to_h
           end
         end
-        Legion::Logging.debug "[cache] MGET keys=#{keys.size}" if defined?(Legion::Logging)
+        cache_logger.debug "[cache] MGET keys=#{keys.size}"
         result
       rescue ::Redis::BaseError => e
-        log_cluster_error(e)
+        log_cluster_error('redis_mget', e, key_count: keys.size)
         raise
       end
 
@@ -133,14 +142,18 @@ module Legion
             conn.mset(*hash.flatten) == 'OK'
           end
         end
-        Legion::Logging.debug "[cache] MSET keys=#{hash.size}" if defined?(Legion::Logging)
+        cache_logger.debug "[cache] MSET keys=#{hash.size}"
         result
       rescue ::Redis::BaseError => e
-        log_cluster_error(e)
+        log_cluster_error('redis_mset', e, key_count: hash.size)
         raise
       end
 
       private
+
+      def cache_logger
+        @component_logger || log
+      end
 
       def cluster_mget(conn, keys)
         groups = group_keys_by_slot(keys)
@@ -172,7 +185,7 @@ module Legion
         end
         true
       rescue StandardError => e
-        Legion::Logging.warn("Redis#cluster_flush cluster node flush failed, falling back to single flushdb: #{e.message}") if defined?(Legion::Logging)
+        handle_exception(e, level: :warn, handled: true, operation: :cluster_flush, fallback: :single_flushdb)
         conn.flushdb == 'OK'
       end
 
@@ -190,14 +203,12 @@ module Legion
 
         Legion::Cache::Settings.resolve_servers(driver: 'redis', server: server, servers: Array(servers)).first
       rescue StandardError => e
-        Legion::Logging.debug("Redis#resolved_redis_address failed: #{e.message}") if defined?(Legion::Logging)
+        handle_exception(e, level: :warn, handled: true, operation: :resolved_redis_address)
         'unknown'
       end
 
-      def log_cluster_error(error)
-        return unless defined?(Legion::Logging)
-
-        Legion::Logging.warn "Redis cluster error: #{error.class} — #{error.message}"
+      def log_cluster_error(operation, error, **)
+        handle_exception(error, level: :warn, handled: false, operation: operation, **)
       end
 
       def redis_tls_options(port:)
@@ -219,7 +230,7 @@ module Legion
 
         Legion::Settings[:cache][:tls] || {}
       rescue StandardError => e
-        Legion::Logging.debug("Redis#cache_tls_settings failed: #{e.message}") if defined?(Legion::Logging)
+        handle_exception(e, level: :warn, handled: true, operation: :cache_tls_settings)
         {}
       end
     end
