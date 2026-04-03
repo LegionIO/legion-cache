@@ -20,7 +20,7 @@ module Legion
       def self.default
         {
           driver:             driver,
-          servers:            resolve_servers(driver: driver),
+          servers:            [],
           connected:          false,
           enabled:            true,
           namespace:          'legion',
@@ -46,7 +46,7 @@ module Legion
       def self.local
         {
           driver:             driver,
-          servers:            resolve_servers(driver: driver),
+          servers:            [],
           connected:          false,
           enabled:            true,
           namespace:          'legion_local',

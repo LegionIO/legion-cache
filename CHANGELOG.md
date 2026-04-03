@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.3.22] - 2026-04-03
+
+### Fixed
+- Default `servers` no longer pre-computed at require time with stale driver port; resolves Redis connecting to `127.0.0.1:11211` (memcached default) instead of user-configured host
+
 ## [1.3.21] - 2026-04-02
 
 ### Fixed

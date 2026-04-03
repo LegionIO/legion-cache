@@ -16,9 +16,8 @@ RSpec.describe Legion::Cache::Settings do
       expect(%w[dalli redis]).to include(defaults[:driver])
     end
 
-    it 'has servers default matching driver port' do
-      expected_port = defaults[:driver] == 'redis' ? 6379 : 11_211
-      expect(defaults[:servers]).to eq(["127.0.0.1:#{expected_port}"])
+    it 'defaults servers to empty array (resolved at connection time)' do
+      expect(defaults[:servers]).to eq([])
     end
 
     it 'has connected set to false' do
@@ -77,9 +76,8 @@ RSpec.describe Legion::Cache::Settings do
       expect(locals[:enabled]).to eq(true)
     end
 
-    it 'defaults servers to localhost with driver-appropriate port' do
-      expected_port = locals[:driver] == 'redis' ? 6379 : 11_211
-      expect(locals[:servers]).to eq(["127.0.0.1:#{expected_port}"])
+    it 'defaults servers to empty array (resolved at connection time)' do
+      expect(locals[:servers]).to eq([])
     end
 
     it 'defaults namespace to legion_local' do
