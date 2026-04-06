@@ -26,10 +26,10 @@ RSpec.describe 'exception handling' do
     end
 
     describe 'flush handles errors internally' do
-      it 'flush returns nil on error' do
+      it 'flush returns false on error' do
         store = described_class.instance_variable_get(:@store)
         allow(store).to receive(:clear).and_raise(RuntimeError, 'boom')
-        expect(described_class.flush).to be_nil
+        expect(described_class.flush).to be(false)
         allow(store).to receive(:clear).and_call_original
       end
     end
