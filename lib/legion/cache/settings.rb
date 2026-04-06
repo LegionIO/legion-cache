@@ -31,7 +31,7 @@ module Legion
           cache_nils:         false,
           pool_size:          10,
           timeout:            5,
-          default_ttl:        60,
+          default_ttl:        3600,
           serializer:         Legion::JSON,
           cluster:            nil,
           replica:            false,
@@ -39,7 +39,17 @@ module Legion
           username:           nil,
           password:           nil,
           db:                 nil,
-          reconnect_attempts: [0, 0.5, 1].freeze
+          reconnect_attempts: [0, 0.5, 1].freeze,
+          async:              {
+            pool_size:        4,
+            queue_size:       1000,
+            shutdown_timeout: 5
+          }.freeze,
+          reconnect:          {
+            initial_delay: 1,
+            max_delay:     60,
+            enabled:       true
+          }.freeze
         }
       end
 
@@ -57,7 +67,7 @@ module Legion
           cache_nils:         false,
           pool_size:          5,
           timeout:            3,
-          default_ttl:        60,
+          default_ttl:        21_600,
           serializer:         Legion::JSON,
           username:           nil,
           password:           nil,

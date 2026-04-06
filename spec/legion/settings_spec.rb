@@ -65,6 +65,36 @@ RSpec.describe Legion::Cache::Settings do
     end
   end
 
+  describe 'default TTL values' do
+    it 'has global default_ttl of 3600' do
+      expect(Legion::Cache::Settings.default[:default_ttl]).to eq(3600)
+    end
+
+    it 'has local default_ttl of 21600' do
+      expect(Legion::Cache::Settings.local[:default_ttl]).to eq(21_600)
+    end
+  end
+
+  describe 'async settings' do
+    it 'includes async defaults' do
+      expect(Legion::Cache::Settings.default[:async]).to include(
+        pool_size:        4,
+        queue_size:       1000,
+        shutdown_timeout: 5
+      )
+    end
+  end
+
+  describe 'reconnect settings' do
+    it 'includes reconnect defaults' do
+      expect(Legion::Cache::Settings.default[:reconnect]).to include(
+        initial_delay: 1,
+        max_delay:     60,
+        enabled:       true
+      )
+    end
+  end
+
   describe '.local' do
     subject(:locals) { described_class.local }
 

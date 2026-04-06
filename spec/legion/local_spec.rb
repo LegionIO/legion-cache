@@ -71,6 +71,24 @@ RSpec.describe Legion::Cache::Local do
     end
   end
 
+  describe 'method signatures' do
+    it 'responds to enabled?' do
+      expect(described_class).to respond_to(:enabled?)
+    end
+
+    it 'set accepts keyword ttl' do
+      driver = double('driver')
+      allow(driver).to receive(:set_sync)
+      described_class.instance_variable_set(:@driver, driver)
+      described_class.instance_variable_set(:@connected, true)
+      expect { described_class.set('k', 'v', ttl: 120) }.not_to raise_error
+    end
+
+    it 'flush takes no arguments' do
+      expect(described_class.method(:flush).arity).to eq(0)
+    end
+  end
+
   describe 'not connected' do
     before { described_class.reset! }
 

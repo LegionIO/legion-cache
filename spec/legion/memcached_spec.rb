@@ -3,6 +3,31 @@
 require 'spec_helper'
 require 'legion/cache/memcached'
 
+RSpec.describe Legion::Cache::Memcached do
+  describe 'method signatures' do
+    it 'set accepts keyword ttl' do
+      cache = described_class.dup
+      pool = instance_double(ConnectionPool)
+      cache.instance_variable_set(:@client, pool)
+      cache.instance_variable_set(:@connected, true)
+
+      dalli = instance_double(Dalli::Client)
+      allow(pool).to receive(:with).and_yield(dalli)
+      allow(dalli).to receive(:set).and_return(1)
+
+      expect { cache.set('k', 'v', ttl: 120) }.not_to raise_error
+    end
+
+    it 'flush takes no arguments' do
+      expect(described_class.method(:flush).arity).to eq(0)
+    end
+
+    it 'uses log instead of cache_logger' do
+      expect(described_class.private_method_defined?(:cache_logger)).to be(false)
+    end
+  end
+end
+
 RSpec.describe Legion::Cache::Memcached, :integration do
   before(:all) do
     @cache = Legion::Cache::Memcached

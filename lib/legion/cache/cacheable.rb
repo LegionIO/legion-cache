@@ -72,13 +72,13 @@ module Legion
         case scope
         when :global
           if global_cache_available?
-            Legion::Cache.set(key, value, ttl)
+            Legion::Cache.set(key, value, ttl: ttl, async: false)
           else
             memory_write(key, value, ttl)
           end
         else
           if local_cache_available?
-            result = local_cache_write(key, value, ttl)
+            result = local_cache_write(key, value, ttl: ttl)
             memory_write(key, value, ttl) unless result
           else
             memory_write(key, value, ttl)
@@ -104,10 +104,10 @@ module Legion
         LOCAL_CACHE_MISS
       end
 
-      def self.local_cache_write(key, value, ttl)
+      def self.local_cache_write(key, value, ttl:)
         return unless local_cache_available?
 
-        Legion::Cache::Local.set(key, value, ttl)
+        Legion::Cache::Local.set(key, value, ttl: ttl)
       rescue StandardError => e
         handle_exception(e, level: :warn, operation: :local_cache_write, key: key, ttl: ttl)
         nil

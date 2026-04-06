@@ -3,6 +3,44 @@
 require 'spec_helper'
 require 'legion/cache/redis'
 
+RSpec.describe Legion::Cache::Redis do
+  describe 'method signatures' do
+    it 'set accepts keyword ttl' do
+      cache = described_class.dup
+      pool = instance_double(ConnectionPool)
+      cache.instance_variable_set(:@client, pool)
+      cache.instance_variable_set(:@connected, true)
+
+      redis = instance_double(Redis)
+      allow(pool).to receive(:with).and_yield(redis)
+      allow(redis).to receive(:set).and_return('OK')
+
+      expect { cache.set('k', 'v', ttl: 120) }.not_to raise_error
+    end
+
+    it 'fetch accepts keyword ttl' do
+      cache = described_class.dup
+      pool = instance_double(ConnectionPool)
+      cache.instance_variable_set(:@client, pool)
+      cache.instance_variable_set(:@connected, true)
+
+      redis = instance_double(Redis)
+      allow(pool).to receive(:with).and_yield(redis)
+      allow(redis).to receive(:get).and_return('val')
+
+      expect { cache.fetch('k', ttl: 60) }.not_to raise_error
+    end
+
+    it 'flush takes no arguments' do
+      expect(described_class.method(:flush).arity).to eq(0)
+    end
+
+    it 'uses log instead of cache_logger' do
+      expect(described_class.private_method_defined?(:cache_logger)).to be(false)
+    end
+  end
+end
+
 RSpec.describe Legion::Cache::Redis, :integration do
   before(:all) do
     @cache = Legion::Cache::Redis

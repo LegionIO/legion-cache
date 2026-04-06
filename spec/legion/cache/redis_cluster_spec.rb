@@ -176,15 +176,15 @@ RSpec.describe Legion::Cache::Redis, 'cluster mode' do
       expect(described_class).not_to receive(:set)
       fetch_block = proc { 'computed' }
 
-      expect(described_class.fetch('fetch-key', 60, &fetch_block)).to eq('cached')
+      expect(described_class.fetch('fetch-key', ttl: 60, &fetch_block)).to eq('cached')
     end
 
     it 'stores and returns the computed value on miss' do
       allow(described_class).to receive(:get).with('fetch-key').and_return(nil)
-      expect(described_class).to receive(:set).with('fetch-key', 'computed', 60).and_return(true)
+      expect(described_class).to receive(:set).with('fetch-key', 'computed', ttl: 60).and_return(true)
       fetch_block = proc { 'computed' }
 
-      expect(described_class.fetch('fetch-key', 60, &fetch_block)).to eq('computed')
+      expect(described_class.fetch('fetch-key', ttl: 60, &fetch_block)).to eq('computed')
     end
   end
 
@@ -251,82 +251,34 @@ RSpec.describe Legion::Cache::Redis, 'cluster mode' do
       allow(pool).to receive(:with).and_yield(redis_conn)
     end
 
-    it 'routes get failures through handle_exception and re-raises' do
+    it 'get returns nil on failure (handled)' do
       allow(redis_conn).to receive(:get).and_raise(Redis::BaseError, 'node down')
-      allow(described_class).to receive(:handle_exception)
-      expect { described_class.send(:get, 'key') }.to raise_error(Redis::BaseError)
-      expect(described_class).to have_received(:handle_exception).with(
-        an_instance_of(Redis::BaseError),
-        level:     :warn,
-        handled:   false,
-        operation: 'redis_get',
-        key:       'key'
-      )
+      expect(described_class.get('key')).to be_nil
     end
 
-    it 'routes set failures through handle_exception and re-raises' do
+    it 'set_sync re-raises on failure' do
       allow(redis_conn).to receive(:set).and_raise(Redis::BaseError, 'write failed')
-      allow(described_class).to receive(:handle_exception)
-      expect { described_class.send(:set, 'key', 'val') }.to raise_error(Redis::BaseError)
-      expect(described_class).to have_received(:handle_exception).with(
-        an_instance_of(Redis::BaseError),
-        level:     :warn,
-        handled:   false,
-        operation: 'redis_set',
-        key:       'key',
-        ttl:       nil
-      )
+      expect { described_class.set_sync('key', 'val', ttl: 60) }.to raise_error(Redis::BaseError)
     end
 
-    it 'routes delete failures through handle_exception and re-raises' do
+    it 'delete_sync re-raises on failure' do
       allow(redis_conn).to receive(:del).and_raise(Redis::BaseError, 'conn lost')
-      allow(described_class).to receive(:handle_exception)
-      expect { described_class.send(:delete, 'key') }.to raise_error(Redis::BaseError)
-      expect(described_class).to have_received(:handle_exception).with(
-        an_instance_of(Redis::BaseError),
-        level:     :warn,
-        handled:   false,
-        operation: 'redis_delete',
-        key:       'key'
-      )
+      expect { described_class.delete_sync('key') }.to raise_error(Redis::BaseError)
     end
 
-    it 'routes mget failures through handle_exception and re-raises' do
+    it 'mget returns empty hash on failure (handled)' do
       allow(redis_conn).to receive(:mget).and_raise(Redis::BaseError, 'cluster fail')
-      allow(described_class).to receive(:handle_exception)
-      expect { described_class.mget('a') }.to raise_error(Redis::BaseError)
-      expect(described_class).to have_received(:handle_exception).with(
-        an_instance_of(Redis::BaseError),
-        level:     :warn,
-        handled:   false,
-        operation: 'redis_mget',
-        key_count: 1
-      )
+      expect(described_class.mget('a')).to eq({})
     end
 
-    it 'routes mset failures through handle_exception and re-raises' do
+    it 'mset_sync re-raises on failure' do
       allow(redis_conn).to receive(:mset).and_raise(Redis::BaseError, 'cluster fail')
-      allow(described_class).to receive(:handle_exception)
-      expect { described_class.mset({ 'a' => '1' }) }.to raise_error(Redis::BaseError)
-      expect(described_class).to have_received(:handle_exception).with(
-        an_instance_of(Redis::BaseError),
-        level:     :warn,
-        handled:   false,
-        operation: 'redis_mset',
-        key_count: 1
-      )
+      expect { described_class.mset_sync({ 'a' => '1' }) }.to raise_error(Redis::BaseError)
     end
 
-    it 'routes flush failures through handle_exception and re-raises' do
+    it 'flush returns nil on failure (handled)' do
       allow(redis_conn).to receive(:flushdb).and_raise(Redis::BaseError, 'flush fail')
-      allow(described_class).to receive(:handle_exception)
-      expect { described_class.flush }.to raise_error(Redis::BaseError)
-      expect(described_class).to have_received(:handle_exception).with(
-        an_instance_of(Redis::BaseError),
-        level:     :warn,
-        handled:   false,
-        operation: 'redis_flush'
-      )
+      expect(described_class.flush).to be_nil
     end
   end
 
