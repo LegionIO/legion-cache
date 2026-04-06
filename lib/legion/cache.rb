@@ -39,8 +39,31 @@ module Legion
         @active_shared_driver || configured_shared_driver
       end
 
+      def stats
+        {
+          driver: driver_name,
+          servers: resolved_servers,
+          enabled: enabled?,
+          connected: connected?,
+          using_local: using_local?,
+          using_memory: using_memory?,
+          pool_size: safe_pool_size,
+          pool_available: safe_pool_available,
+          async_pool_size: async_writer_pool_size,
+          async_queue_depth: async_writer_queue_depth,
+          async_processed: async_writer_processed_count,
+          reconnect_attempts: reconnector_attempts,
+          uptime: uptime_seconds
+        }.freeze
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_stats)
+        { error: e.message }.freeze
+      end
+
       def setup(**)
         return Legion::Settings[:cache][:connected] = true if connected?
+
+        @setup_at = Time.now
 
         if ENV['LEGION_MODE'] == 'lite'
           Legion::Cache::Memory.setup
@@ -367,6 +390,56 @@ module Legion
       ensure
         @client = nil
         @connected = false
+      end
+
+      def resolved_servers
+        return [] if @using_memory
+
+        Array(Legion::Settings.dig(:cache, :servers))
+      rescue StandardError
+        []
+      end
+
+      def safe_pool_size
+        return 1 if @using_memory
+        return 0 unless connected?
+
+        pool_size
+      rescue StandardError
+        0
+      end
+
+      def safe_pool_available
+        return 1 if @using_memory
+        return 0 unless connected?
+
+        available
+      rescue StandardError
+        0
+      end
+
+      def async_writer_pool_size
+        0
+      end
+
+      def async_writer_queue_depth
+        0
+      end
+
+      def async_writer_processed_count
+        0
+      end
+
+      def reconnector_attempts
+        0
+      end
+
+      def uptime_seconds
+        return 0 unless @setup_at
+
+        (Time.now - @setup_at).to_i
+      rescue StandardError
+        0
       end
     end
   end

@@ -122,6 +122,18 @@ module Legion
           true
         end
 
+        def stats
+          {
+            driver: driver_name,
+            servers: local_servers,
+            enabled: enabled?,
+            connected: connected?
+          }.freeze
+        rescue StandardError => e
+          handle_exception(e, level: :warn, handled: true, operation: :cache_local_stats)
+          { error: e.message }.freeze
+        end
+
         def client
           @driver&.client
         end
@@ -168,6 +180,12 @@ module Legion
         end
 
         private
+
+        def local_servers
+          Array(local_settings[:servers])
+        rescue StandardError
+          []
+        end
 
         def local_default_ttl
           return 21_600 unless defined?(Legion::Settings)
