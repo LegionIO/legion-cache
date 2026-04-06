@@ -49,9 +49,7 @@ module Legion
         @attempts.value
       end
 
-      def next_retry_at
-        @next_retry_at
-      end
+      attr_reader :next_retry_at
 
       private
 

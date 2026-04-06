@@ -75,8 +75,8 @@ module Legion
         nil
       end
 
-      def set(key, value, ttl: nil, **opts)
-        set_sync(key, value, ttl: ttl, **opts)
+      def set(key, value, ttl: nil, **)
+        set_sync(key, value, ttl: ttl, **)
       end
 
       def set_sync(key, value, ttl: nil, **)
@@ -127,7 +127,7 @@ module Legion
         mset_sync(hash, ttl: ttl)
       end
 
-      def mset_sync(hash, ttl: nil, **)
+      def mset_sync(hash, ttl: nil, **) # rubocop:disable Lint/UnusedMethodArgument
         return true if hash.empty?
 
         client.with { |conn| conn.set_multi(hash) }

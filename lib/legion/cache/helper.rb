@@ -109,7 +109,7 @@ module Legion
         {}
       end
 
-      def local_cache_mset(hash, ttl: nil, async: true)
+      def local_cache_mset(hash, ttl: nil, async: true) # rubocop:disable Lint/UnusedMethodArgument
         return true if hash.empty?
 
         effective_ttl = ttl || local_cache_default_ttl
@@ -202,7 +202,7 @@ module Legion
 
       # --- Core Operations (local tier) ---
 
-      def local_cache_set(key, value, ttl: nil, async: true, phi: false)
+      def local_cache_set(key, value, ttl: nil, async: true, phi: false) # rubocop:disable Lint/UnusedMethodArgument
         effective_ttl = ttl || local_cache_default_ttl
         effective_ttl = Legion::Cache.enforce_phi_ttl(effective_ttl, phi: phi)
         Legion::Cache::Local.set(cache_namespace + key, value, ttl: effective_ttl)
@@ -212,7 +212,7 @@ module Legion
         Legion::Cache::Local.get(cache_namespace + key)
       end
 
-      def local_cache_delete(key, async: true)
+      def local_cache_delete(key, async: true) # rubocop:disable Lint/UnusedMethodArgument
         Legion::Cache::Local.delete(cache_namespace + key)
       end
 

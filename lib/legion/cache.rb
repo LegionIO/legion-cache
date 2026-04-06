@@ -45,19 +45,19 @@ module Legion
 
       def stats
         {
-          driver: driver_name,
-          servers: resolved_servers,
-          enabled: enabled?,
-          connected: connected?,
-          using_local: using_local?,
-          using_memory: using_memory?,
-          pool_size: safe_pool_size,
-          pool_available: safe_pool_available,
-          async_pool_size: async_writer_pool_size,
-          async_queue_depth: async_writer_queue_depth,
-          async_processed: async_writer_processed_count,
+          driver:             driver_name,
+          servers:            resolved_servers,
+          enabled:            enabled?,
+          connected:          connected?,
+          using_local:        using_local?,
+          using_memory:       using_memory?,
+          pool_size:          safe_pool_size,
+          pool_available:     safe_pool_available,
+          async_pool_size:    async_writer_pool_size,
+          async_queue_depth:  async_writer_queue_depth,
+          async_processed:    async_writer_processed_count,
           reconnect_attempts: reconnector_attempts,
-          uptime: uptime_seconds
+          uptime:             uptime_seconds
         }.freeze
       rescue StandardError => e
         handle_exception(e, level: :warn, handled: true, operation: :cache_stats)
@@ -487,7 +487,7 @@ module Legion
 
         stop_reconnector
         @reconnector = Legion::Cache::Reconnector.new(
-          tier: :shared,
+          tier:          :shared,
           connect_block: -> { setup_shared },
           enabled_block: -> { enabled? }
         )

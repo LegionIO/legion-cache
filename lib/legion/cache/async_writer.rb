@@ -29,9 +29,9 @@ module Legion
           qs = queue_size || @config_queue_size || configured_queue_size
 
           @executor = Concurrent::ThreadPoolExecutor.new(
-            min_threads: 1,
-            max_threads: ps,
-            max_queue: qs,
+            min_threads:     1,
+            max_threads:     ps,
+            max_queue:       qs,
             fallback_policy: :caller_runs
           )
           log.info "Legion::Cache::AsyncWriter started pool_size=#{ps} queue_size=#{qs}"

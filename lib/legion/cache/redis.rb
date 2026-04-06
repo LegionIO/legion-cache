@@ -96,8 +96,8 @@ module Legion
         result
       end
 
-      def set(key, value, ttl: nil, **opts)
-        set_sync(key, value, ttl: ttl, **opts)
+      def set(key, value, ttl: nil, **)
+        set_sync(key, value, ttl: ttl, **)
       end
 
       def set_sync(key, value, ttl: nil, **)
@@ -164,7 +164,7 @@ module Legion
         mset_sync(hash, ttl: ttl)
       end
 
-      def mset_sync(hash, ttl: nil, **)
+      def mset_sync(hash, ttl: nil, **) # rubocop:disable Lint/UnusedMethodArgument
         return true if hash.empty?
 
         result = client.with do |conn|
@@ -181,10 +181,10 @@ module Legion
         raise
       end
 
-      private
-
       SERIALIZE_STRING = "S\x00".b.freeze
       SERIALIZE_JSON   = "J\x00".b.freeze
+
+      private
 
       def serialize_value(value)
         case value

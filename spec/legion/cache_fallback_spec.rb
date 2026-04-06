@@ -18,11 +18,11 @@ RSpec.describe 'Legion::Cache fallback' do
     allow(Legion::Cache::Local).to receive(:shutdown).and_return(false)
     allow(Legion::Cache::Local).to receive(:close).and_return(false)
     allow(Legion::Cache::Local).to receive(:get) { |key| local_store[key] }
-    allow(Legion::Cache::Local).to receive(:set) do |key, value, ttl: nil, **|
+    allow(Legion::Cache::Local).to receive(:set) do |key, value, **_opts|
       local_store[key] = value
       true
     end
-    allow(Legion::Cache::Local).to receive(:set_sync) do |key, value, ttl: nil, **|
+    allow(Legion::Cache::Local).to receive(:set_sync) do |key, value, **_opts|
       local_store[key] = value
       true
     end
@@ -32,7 +32,7 @@ RSpec.describe 'Legion::Cache fallback' do
     allow(Legion::Cache::Local).to receive(:delete_sync) do |key|
       !local_store.delete(key).nil?
     end
-    allow(Legion::Cache::Local).to receive(:fetch) do |key, ttl: nil, &block|
+    allow(Legion::Cache::Local).to receive(:fetch) do |key, **_opts, &block|
       next local_store[key] if local_store.key?(key)
 
       value = block.call
@@ -70,9 +70,9 @@ RSpec.describe 'Legion::Cache fallback' do
 
     it 'delegates get/set/delete to local when in fallback mode' do
       Legion::Cache.setup
-      expect(Legion::Cache.set('fallback_test', 'works')).to be(true)
+      expect(Legion::Cache.set('fallback_test', 'works', async: false)).to be(true)
       expect(Legion::Cache.get('fallback_test')).to eq('works')
-      expect(Legion::Cache.delete('fallback_test')).to be(true)
+      expect(Legion::Cache.delete('fallback_test', async: false)).to be(true)
     end
 
     it 'delegates fetch blocks to local when in fallback mode' do
@@ -85,7 +85,7 @@ RSpec.describe 'Legion::Cache fallback' do
 
     it 'delegates flush to local when in fallback mode' do
       Legion::Cache.setup
-      Legion::Cache.set('flush_test', 'bye')
+      Legion::Cache.set('flush_test', 'bye', async: false)
 
       expect(Legion::Cache.flush).to be(true)
       expect(Legion::Cache.get('flush_test')).to be_nil

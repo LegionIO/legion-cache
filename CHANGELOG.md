@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-04-06
+
+### Added
+- Async write support via `Legion::Cache::AsyncWriter` backed by `concurrent-ruby` ThreadPoolExecutor
+- `set`, `delete`, and `mset` now accept `async:` keyword (default `true`) for non-blocking writes
+- `Legion::Cache::Reconnector` with exponential backoff (1s to 60s) for background reconnection
+- Reconnector auto-starts when both shared and local cache are unavailable at setup
+- `enabled?` guard on both shared and local tiers
+- `stats` method returning frozen Hash with driver, connection, pool, async, and reconnect metrics
+- `set_sync`, `delete_sync`, `mset_sync` explicit synchronous write methods on all tiers
+- Async and reconnect default settings in `Legion::Cache::Settings`
+- Transparent JSON serialization for Redis driver (prefix-byte protocol, backward-compatible with legacy data)
+
+### Changed
+- All cache drivers now use keyword TTL (`ttl:`) instead of positional arguments
+- `flush` takes no arguments across all drivers (was `flush(delay = 0)`)
+- `Helper` module updated: `FALLBACK_TTL` changed from 60 to 3600, all delegations use keyword signatures, `cache_set`/`cache_delete`/`cache_mset` accept `async:` keyword
+- `Cacheable` module updated: `cache_write` and `local_cache_write` use keyword TTL
+- Default TTL changed from 60 to 3600 (shared) and 21600 (local)
+- Version bump from 1.3.22 to 1.4.0
+
+### Fixed
+- Unified exception handling model: reads return nil (handled), sync writes re-raise, lifecycle handles internally
+
 ## [1.3.22] - 2026-04-03
 
 ### Fixed

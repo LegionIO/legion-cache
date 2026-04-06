@@ -63,8 +63,8 @@ module Legion
           nil
         end
 
-        def set(key, value, ttl: nil, **opts)
-          set_sync(key, value, ttl: ttl, **opts)
+        def set(key, value, ttl: nil, **)
+          set_sync(key, value, ttl: ttl, **)
         end
 
         def set_sync(key, value, ttl: nil, **)
@@ -124,9 +124,9 @@ module Legion
 
         def stats
           {
-            driver: driver_name,
-            servers: local_servers,
-            enabled: enabled?,
+            driver:    driver_name,
+            servers:   local_servers,
+            enabled:   enabled?,
             connected: connected?
           }.freeze
         rescue StandardError => e

@@ -6,12 +6,17 @@ require 'legion/cache/reconnector'
 
 RSpec.describe Legion::Cache::Reconnector do
   let(:connect_called) { Concurrent::AtomicFixnum.new(0) }
-  let(:connect_block) { -> { connect_called.increment; raise 'nope' } }
+  let(:connect_block) do
+    lambda {
+      connect_called.increment
+      raise 'nope'
+    }
+  end
   let(:enabled_block) { -> { true } }
 
   subject(:reconnector) do
     described_class.new(
-      tier: :shared,
+      tier:          :shared,
       connect_block: connect_block,
       enabled_block: enabled_block
     )
