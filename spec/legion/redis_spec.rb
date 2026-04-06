@@ -38,6 +38,21 @@ RSpec.describe Legion::Cache::Redis do
     it 'uses log instead of cache_logger' do
       expect(described_class.private_method_defined?(:cache_logger)).to be(false)
     end
+
+    it 'uses settings pool_size instead of hardcoded 20' do
+      cache = described_class.dup
+      cache.instance_variable_set(:@client, nil)
+      cache.instance_variable_set(:@connected, false)
+
+      redis_instance = instance_double(Redis)
+      allow(Redis).to receive(:new).and_return(redis_instance)
+
+      original = Legion::Settings[:cache][:pool_size]
+      Legion::Settings[:cache][:pool_size] = 8
+      cache.client(servers: ['127.0.0.1:6379'])
+      expect(cache.pool_size).to eq(8)
+      Legion::Settings[:cache][:pool_size] = original
+    end
   end
 end
 

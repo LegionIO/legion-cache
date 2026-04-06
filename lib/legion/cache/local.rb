@@ -1,16 +1,20 @@
 # frozen_string_literal: true
 
+require 'concurrent'
 require 'legion/logging/helper'
 require 'legion/cache/settings'
 
 module Legion
   module Cache
     module Local
+      @connected = Concurrent::AtomicBoolean.new(false)
+
       class << self
         include Legion::Logging::Helper
 
         def setup(**)
-          return if @connected
+          return unless enabled?
+          return if connected?
 
           settings = local_settings
           return unless settings[:enabled]
@@ -19,12 +23,12 @@ module Legion
           @driver_name = Legion::Cache::Settings.normalize_driver(driver_name)
           @driver = build_driver(driver_name)
           @driver.client(**settings, logger: log, **)
-          @connected = true
+          @connected.make_true
           servers = Array(settings[:servers]).join(', ')
           log.info "Legion::Cache::Local connected (#{driver_name}) to #{servers}"
         rescue StandardError => e
           handle_exception(e, level: :warn, handled: true, operation: :cache_local_setup, driver: driver_name)
-          @connected = false
+          @connected.make_false
         end
 
         def shutdown
@@ -34,7 +38,7 @@ module Legion
           @driver&.close
           @driver = nil
           @driver_name = nil
-          @connected = false
+          @connected.make_false
         end
 
         def enabled?
@@ -47,7 +51,7 @@ module Legion
         end
 
         def connected?
-          @connected == true
+          @connected&.true? || false
         end
 
         def driver_name
@@ -142,7 +146,7 @@ module Legion
           @driver&.close
           @driver = nil
           @driver_name = nil
-          @connected = false
+          @connected.make_false
           log.info 'Legion::Cache::Local pool closed'
           @connected
         end
@@ -150,7 +154,7 @@ module Legion
         def restart(**opts)
           settings = local_settings
           @driver&.restart(**settings.merge(opts, logger: log))
-          @connected = true
+          @connected.make_true
           log.info 'Legion::Cache::Local pool restarted'
           @connected
         end
@@ -174,7 +178,7 @@ module Legion
         def reset!
           @driver = nil
           @driver_name = nil
-          @connected = false
+          @connected.make_false
           log.debug 'Legion::Cache::Local state reset'
           @connected
         end

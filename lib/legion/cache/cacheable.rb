@@ -107,7 +107,7 @@ module Legion
       def self.local_cache_write(key, value, ttl:)
         return unless local_cache_available?
 
-        Legion::Cache::Local.set(key, value, ttl: ttl)
+        Legion::Cache::Local.set(key, value, ttl: ttl, async: false)
       rescue StandardError => e
         handle_exception(e, level: :warn, operation: :local_cache_write, key: key, ttl: ttl)
         nil

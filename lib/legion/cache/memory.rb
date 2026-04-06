@@ -51,7 +51,7 @@ module Legion
         nil
       end
 
-      def set(key, value, ttl: nil, async: true, phi: false)
+      def set(key, value, ttl: nil, async: true, phi: false) # rubocop:disable Lint/UnusedMethodArgument
         set_sync(key, value, ttl: ttl, phi: phi)
       end
 
@@ -82,7 +82,7 @@ module Legion
         nil
       end
 
-      def delete(key, async: true)
+      def delete(key, async: true) # rubocop:disable Lint/UnusedMethodArgument
         delete_sync(key)
       end
 
@@ -192,7 +192,7 @@ module Legion
                 3600
               end
         result = ttl.nil? ? max : [ttl, max].min
-        result < 1 ? 1 : result
+        [result, 1].max
       end
     end
   end

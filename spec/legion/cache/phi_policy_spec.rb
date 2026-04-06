@@ -44,11 +44,11 @@ RSpec.describe 'Legion::Cache PHI TTL policy' do
   describe 'Legion::Cache.set with phi: true option' do
     before do
       allow(Legion::Cache::Memory).to receive(:set).with(anything, anything, ttl: anything)
-      Legion::Cache.instance_variable_set(:@using_memory, true)
+      Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(true))
     end
 
     after do
-      Legion::Cache.instance_variable_set(:@using_memory, false)
+      Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(false))
     end
 
     it 'enforces phi max ttl before delegating to memory adapter' do

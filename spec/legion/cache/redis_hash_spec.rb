@@ -8,7 +8,7 @@ RSpec.describe Legion::Cache::RedisHash do
 
   describe '.redis_available?' do
     context 'when the cache pool is nil' do
-      before { allow(Legion::Cache).to receive(:instance_variable_get).with(:@client).and_return(nil) }
+      before { allow(Legion::Cache).to receive(:pool).and_return(nil) }
 
       it 'returns false' do
         expect(mod.redis_available?).to be false
@@ -18,7 +18,7 @@ RSpec.describe Legion::Cache::RedisHash do
     context 'when the cache is not connected' do
       before do
         pool = double('ConnectionPool')
-        allow(Legion::Cache).to receive(:instance_variable_get).with(:@client).and_return(pool)
+        allow(Legion::Cache).to receive(:pool).and_return(pool)
         allow(Legion::Cache).to receive(:connected?).and_return(false)
         allow(Legion::Cache).to receive(:driver_name).and_return('redis')
       end
@@ -31,7 +31,7 @@ RSpec.describe Legion::Cache::RedisHash do
     context 'when the cache is connected on Redis' do
       before do
         pool = double('ConnectionPool')
-        allow(Legion::Cache).to receive(:instance_variable_get).with(:@client).and_return(pool)
+        allow(Legion::Cache).to receive(:pool).and_return(pool)
         allow(Legion::Cache).to receive(:connected?).and_return(true)
         allow(Legion::Cache).to receive(:driver_name).and_return('redis')
       end
@@ -44,7 +44,7 @@ RSpec.describe Legion::Cache::RedisHash do
     context 'when the cache is connected on Memcached' do
       before do
         pool = double('ConnectionPool')
-        allow(Legion::Cache).to receive(:instance_variable_get).with(:@client).and_return(pool)
+        allow(Legion::Cache).to receive(:pool).and_return(pool)
         allow(Legion::Cache).to receive(:connected?).and_return(true)
         allow(Legion::Cache).to receive(:driver_name).and_return('dalli')
       end
@@ -55,11 +55,18 @@ RSpec.describe Legion::Cache::RedisHash do
     end
 
     context 'when an exception is raised' do
-      before { allow(Legion::Cache).to receive(:instance_variable_get).and_raise(RuntimeError, 'boom') }
+      before { allow(Legion::Cache).to receive(:pool).and_raise(RuntimeError, 'boom') }
 
       it 'returns false' do
         expect(mod.redis_available?).to be false
       end
+    end
+  end
+
+  describe 'does not access @client directly' do
+    it 'uses Legion::Cache.pool instead of instance_variable_get' do
+      source = File.read(File.expand_path('../../../lib/legion/cache/redis_hash.rb', __dir__))
+      expect(source).not_to include('instance_variable_get(:@client)')
     end
   end
 
@@ -101,7 +108,7 @@ RSpec.describe Legion::Cache::RedisHash do
 
     before do
       allow(mod).to receive(:redis_available?).and_return(true)
-      allow(Legion::Cache).to receive(:instance_variable_get).with(:@client).and_return(pool)
+      allow(Legion::Cache).to receive(:pool).and_return(pool)
       allow(pool).to receive(:with).and_yield(conn)
     end
 
@@ -176,7 +183,7 @@ RSpec.describe Legion::Cache::RedisHash do
 
     before do
       allow(mod).to receive(:redis_available?).and_return(true)
-      allow(Legion::Cache).to receive(:instance_variable_get).with(:@client).and_return(pool)
+      allow(Legion::Cache).to receive(:pool).and_return(pool)
       allow(pool).to receive(:with).and_yield(conn)
     end
 

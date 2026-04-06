@@ -37,7 +37,8 @@ module Legion
         tls_ctx = memcached_tls_context(port: resolved.first.split(':').last.to_i)
         cache_opts[:ssl_context] = tls_ctx if tls_ctx
 
-        @client = ConnectionPool.new(size: pool_size, timeout: self.timeout) do
+        checkout_timeout = opts[:pool_checkout_timeout] || settings[:pool_checkout_timeout] || @timeout
+        @client = ConnectionPool.new(size: pool_size, timeout: checkout_timeout) do
           Dalli::Client.new(resolved, cache_opts)
         end
 

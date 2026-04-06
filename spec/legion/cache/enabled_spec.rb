@@ -5,9 +5,9 @@ require 'legion/cache'
 
 RSpec.describe 'enabled? and connected?' do
   before do
-    Legion::Cache.instance_variable_set(:@connected, false)
-    Legion::Cache.instance_variable_set(:@using_memory, false)
-    Legion::Cache.instance_variable_set(:@using_local, false)
+    Legion::Cache.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(false))
+    Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(false))
+    Legion::Cache.instance_variable_set(:@using_local, Concurrent::AtomicBoolean.new(false))
     Legion::Cache::Local.reset!
   end
 
@@ -33,6 +33,16 @@ RSpec.describe 'enabled? and connected?' do
       Legion::Settings[:cache_local][:enabled] = false
       expect(Legion::Cache::Local.enabled?).to be(false)
       Legion::Settings[:cache_local][:enabled] = true
+    end
+  end
+
+  describe 'setup respects enabled?' do
+    it 'does not connect when disabled' do
+      Legion::Settings[:cache][:enabled] = false
+      expect(Legion::Cache::Local).not_to receive(:setup)
+      Legion::Cache.setup
+      expect(Legion::Cache.connected?).to be(false)
+      Legion::Settings[:cache][:enabled] = true
     end
   end
 

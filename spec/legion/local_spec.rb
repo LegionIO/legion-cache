@@ -80,7 +80,7 @@ RSpec.describe Legion::Cache::Local do
       driver = double('driver')
       allow(driver).to receive(:set_sync)
       described_class.instance_variable_set(:@driver, driver)
-      described_class.instance_variable_set(:@connected, true)
+      described_class.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(true))
       expect { described_class.set('k', 'v', ttl: 120) }.not_to raise_error
     end
 

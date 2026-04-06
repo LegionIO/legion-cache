@@ -11,7 +11,7 @@ module Legion
 
       # Returns true when the Redis driver is loaded and the connection pool is live.
       def redis_available?
-        pool = Legion::Cache.instance_variable_get(:@client)
+        pool = Legion::Cache.pool
         return false if pool.nil?
         return false unless Legion::Cache.respond_to?(:driver_name) && Legion::Cache.driver_name == 'redis'
 
@@ -26,7 +26,7 @@ module Legion
       def hset(key, hash)
         return false unless redis_available?
 
-        Legion::Cache.instance_variable_get(:@client).with do |conn|
+        Legion::Cache.pool.with do |conn|
           flat = hash.flat_map { |k, v| [k.to_s, v.to_s] }
           conn.hset(key, *flat)
         end
@@ -41,7 +41,7 @@ module Legion
       def hgetall(key)
         return nil unless redis_available?
 
-        result = Legion::Cache.instance_variable_get(:@client).with do |conn|
+        result = Legion::Cache.pool.with do |conn|
           conn.hgetall(key)
         end
         log.debug "[cache:redis_hash] HGETALL #{key} fields=#{result.size}"
@@ -55,7 +55,7 @@ module Legion
       def hdel(key, *fields)
         return 0 unless redis_available?
 
-        result = Legion::Cache.instance_variable_get(:@client).with do |conn|
+        result = Legion::Cache.pool.with do |conn|
           conn.hdel(key, *fields)
         end
         log.debug "[cache:redis_hash] HDEL #{key} fields=#{fields.size} removed=#{result}"
@@ -69,7 +69,7 @@ module Legion
       def zadd(key, score, member)
         return false unless redis_available?
 
-        Legion::Cache.instance_variable_get(:@client).with do |conn|
+        Legion::Cache.pool.with do |conn|
           conn.zadd(key, score.to_f, member.to_s)
         end
         log.debug "[cache:redis_hash] ZADD #{key} member=#{member}"
@@ -87,7 +87,7 @@ module Legion
         opts = {}
         opts[:limit] = limit if limit
 
-        result = Legion::Cache.instance_variable_get(:@client).with do |conn|
+        result = Legion::Cache.pool.with do |conn|
           conn.zrangebyscore(key, min, max, **opts)
         end
         log.debug "[cache:redis_hash] ZRANGEBYSCORE #{key} results=#{result.size}"
@@ -101,7 +101,7 @@ module Legion
       def zrem(key, member)
         return false unless redis_available?
 
-        Legion::Cache.instance_variable_get(:@client).with do |conn|
+        Legion::Cache.pool.with do |conn|
           conn.zrem(key, member.to_s)
         end
         log.debug "[cache:redis_hash] ZREM #{key} member=#{member}"
@@ -115,7 +115,7 @@ module Legion
       def expire(key, seconds)
         return false unless redis_available?
 
-        result = Legion::Cache.instance_variable_get(:@client).with do |conn|
+        result = Legion::Cache.pool.with do |conn|
           conn.expire(key, seconds.to_i) == 1
         end
         log.debug "[cache:redis_hash] EXPIRE #{key} seconds=#{seconds} success=#{result}"

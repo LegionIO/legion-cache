@@ -201,40 +201,15 @@ RSpec.describe Legion::Cache::Redis, 'cluster mode' do
     context 'standalone mode' do
       before { described_class.instance_variable_set(:@cluster_mode, false) }
 
-      it 'sets all key-value pairs' do
-        allow(redis_conn).to receive(:mset).with('a', '1', 'b', '2').and_return('OK')
+      it 'sets all key-value pairs via set_sync' do
+        allow(redis_conn).to receive(:set).and_return('OK')
         result = described_class.mset({ 'a' => '1', 'b' => '2' })
         expect(result).to eq true
+        expect(redis_conn).to have_received(:set).twice
       end
 
       it 'returns true for empty hash' do
         result = described_class.mset({})
-        expect(result).to eq true
-      end
-    end
-
-    context 'cluster mode' do
-      before { described_class.instance_variable_set(:@cluster_mode, true) }
-
-      it 'groups keys by slot and sets per group' do
-        converter = class_double('Redis::Cluster::KeySlotConverter').as_stubbed_const
-        allow(converter).to receive(:convert).with('a').and_return(0)
-        allow(converter).to receive(:convert).with('b').and_return(1)
-
-        allow(redis_conn).to receive(:mset).with('a', '1').and_return('OK')
-        allow(redis_conn).to receive(:mset).with('b', '2').and_return('OK')
-
-        result = described_class.mset({ 'a' => '1', 'b' => '2' })
-        expect(result).to eq true
-      end
-
-      it 'handles same-slot keys in single call' do
-        converter = class_double('Redis::Cluster::KeySlotConverter').as_stubbed_const
-        allow(converter).to receive(:convert).and_return(5)
-
-        allow(redis_conn).to receive(:mset).with('x', '10', 'y', '20').and_return('OK')
-
-        result = described_class.mset({ 'x' => '10', 'y' => '20' })
         expect(result).to eq true
       end
     end
@@ -272,7 +247,7 @@ RSpec.describe Legion::Cache::Redis, 'cluster mode' do
     end
 
     it 'mset_sync re-raises on failure' do
-      allow(redis_conn).to receive(:mset).and_raise(Redis::BaseError, 'cluster fail')
+      allow(redis_conn).to receive(:set).and_raise(Redis::BaseError, 'write fail')
       expect { described_class.mset_sync({ 'a' => '1' }) }.to raise_error(Redis::BaseError)
     end
 
@@ -296,17 +271,36 @@ RSpec.describe Legion::Cache::Redis, 'cluster mode' do
     it 'flushes all primary nodes' do
       node_info = "abc123 10.0.0.1:6379@16379 master - 0 0 1 connected 0-5460\ndef456 10.0.0.2:6379@16379 master - 0 0 2 connected 5461-10922\n"
       allow(redis_conn).to receive(:cluster).with('nodes').and_return(node_info)
+      described_class.instance_variable_set(:@connection_opts, {})
 
       node1 = instance_double(Redis)
       node2 = instance_double(Redis)
-      allow(Redis).to receive(:new).with(host: '10.0.0.1', port: 6379).and_return(node1)
-      allow(Redis).to receive(:new).with(host: '10.0.0.2', port: 6379).and_return(node2)
+      allow(Redis).to receive(:new).with(hash_including(host: '10.0.0.1', port: 6379)).and_return(node1)
+      allow(Redis).to receive(:new).with(hash_including(host: '10.0.0.2', port: 6379)).and_return(node2)
       allow(node1).to receive(:flushdb)
       allow(node1).to receive(:close)
       allow(node2).to receive(:flushdb)
       allow(node2).to receive(:close)
 
       expect(described_class.flush).to eq true
+    end
+
+    it 'passes credentials to per-node connections' do
+      cache = described_class.dup
+      cache.instance_variable_set(:@client, pool)
+      cache.instance_variable_set(:@connected, true)
+      cache.instance_variable_set(:@cluster_mode, true)
+      cache.instance_variable_set(:@connection_opts, { username: 'user', password: 'pass' })
+
+      node_info = "abc123 10.0.0.1:6379@16379 myself,master - 0 0 1 connected 0-5460\n"
+      allow(redis_conn).to receive(:cluster).with('nodes').and_return(node_info)
+
+      node_client = instance_double(Redis)
+      expect(Redis).to receive(:new).with(hash_including(host: '10.0.0.1', port: 6379, username: 'user', password: 'pass')).and_return(node_client)
+      allow(node_client).to receive(:flushdb)
+      allow(node_client).to receive(:close)
+
+      cache.flush
     end
 
     it 'falls back to single flushdb on cluster nodes error' do

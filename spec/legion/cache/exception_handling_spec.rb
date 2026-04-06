@@ -94,15 +94,15 @@ RSpec.describe 'Legion::Cache top-level exception handling' do
   before do
     ENV['LEGION_MODE'] = 'lite'
     Legion::Cache::Memory.setup
-    Legion::Cache.instance_variable_set(:@using_memory, true)
-    Legion::Cache.instance_variable_set(:@connected, true)
+    Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(true))
+    Legion::Cache.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(true))
   end
 
   after do
     ENV.delete('LEGION_MODE')
     Legion::Cache::Memory.reset!
-    Legion::Cache.instance_variable_set(:@using_memory, false)
-    Legion::Cache.instance_variable_set(:@connected, false)
+    Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(false))
+    Legion::Cache.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(false))
   end
 
   it 'get returns nil on internal error' do

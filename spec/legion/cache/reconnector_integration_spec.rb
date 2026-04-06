@@ -6,9 +6,9 @@ require 'legion/cache'
 RSpec.describe 'reconnector integration' do
   before do
     Legion::Cache.instance_variable_set(:@client, nil)
-    Legion::Cache.instance_variable_set(:@connected, false)
-    Legion::Cache.instance_variable_set(:@using_local, false)
-    Legion::Cache.instance_variable_set(:@using_memory, false)
+    Legion::Cache.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(false))
+    Legion::Cache.instance_variable_set(:@using_local, Concurrent::AtomicBoolean.new(false))
+    Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(false))
     Legion::Cache.instance_variable_set(:@active_shared_driver, nil)
     Legion::Cache.instance_variable_set(:@reconnector, nil)
     Legion::Cache::Local.reset!
@@ -38,6 +38,20 @@ RSpec.describe 'reconnector integration' do
     expect(reconnector).not_to be_nil
     expect(reconnector.running?).to be(true)
 
+    reconnector.stop
+  end
+
+  it 'starts reconnector even when local fallback succeeds' do
+    allow(Legion::Cache).to receive(:client).and_raise(RuntimeError, 'refused')
+    allow(Legion::Cache::Local).to receive(:connected?).and_return(true)
+    allow(Legion::Cache::Local).to receive(:setup)
+
+    Legion::Cache.setup
+
+    expect(Legion::Cache.using_local?).to be(true)
+    reconnector = Legion::Cache.instance_variable_get(:@reconnector)
+    expect(reconnector).not_to be_nil
+    expect(reconnector.running?).to be(true)
     reconnector.stop
   end
 

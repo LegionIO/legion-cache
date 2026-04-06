@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require 'concurrent-ruby'
+require 'concurrent'
 require 'legion/logging/helper'
 
 module Legion
@@ -11,14 +11,15 @@ module Legion
       DEFAULT_INITIAL_DELAY = 1
       DEFAULT_MAX_DELAY = 60
 
-      def initialize(tier:, connect_block:, enabled_block:)
+      def initialize(tier:, connect_block:, enabled_block:, settings_key: :cache)
         @tier = tier
         @connect_block = connect_block
         @enabled_block = enabled_block
+        @settings_key = settings_key
         @attempts = Concurrent::AtomicFixnum.new(0)
         @thread = nil
         @mutex = Mutex.new
-        @stop_signal = false
+        @stop_signal = Concurrent::AtomicBoolean.new(false)
         @next_retry_at = nil
       end
 
@@ -26,19 +27,21 @@ module Legion
         @mutex.synchronize do
           return if running?
 
-          @stop_signal = false
+          @stop_signal.make_false
           @thread = Thread.new { reconnect_loop }
           log.info "Legion::Cache::Reconnector[#{@tier}] started"
         end
       end
 
       def stop
+        thread_to_join = nil
         @mutex.synchronize do
-          @stop_signal = true
-          @thread&.join(5)
+          @stop_signal.make_true
+          thread_to_join = @thread
           @thread = nil
-          log.info "Legion::Cache::Reconnector[#{@tier}] stopped"
         end
+        thread_to_join&.join(5)
+        log.info "Legion::Cache::Reconnector[#{@tier}] stopped"
       end
 
       def running?
@@ -56,7 +59,7 @@ module Legion
       def reconnect_loop
         delay = configured_initial_delay
 
-        until @stop_signal
+        until @stop_signal.true?
           unless @enabled_block.call
             sleep 1
             next
@@ -65,12 +68,13 @@ module Legion
           begin
             @next_retry_at = Time.now + delay
             sleep delay
-            return if @stop_signal
+            return if @stop_signal.true?
 
             @connect_block.call
-            @attempts.value = 0
+            count = @attempts.value
+            @attempts = Concurrent::AtomicFixnum.new(0)
             @next_retry_at = nil
-            log.info "Legion::Cache::Reconnector[#{@tier}] reconnected"
+            log.info "Legion::Cache::Reconnector[#{@tier}] reconnected after #{count} attempts"
             return
           rescue StandardError => e
             @attempts.increment
@@ -87,7 +91,7 @@ module Legion
       def configured_initial_delay
         return DEFAULT_INITIAL_DELAY unless defined?(Legion::Settings)
 
-        Legion::Settings.dig(:cache, :reconnect, :initial_delay) || DEFAULT_INITIAL_DELAY
+        Legion::Settings.dig(@settings_key, :reconnect, :initial_delay) || DEFAULT_INITIAL_DELAY
       rescue StandardError
         DEFAULT_INITIAL_DELAY
       end
@@ -95,7 +99,7 @@ module Legion
       def configured_max_delay
         return DEFAULT_MAX_DELAY unless defined?(Legion::Settings)
 
-        Legion::Settings.dig(:cache, :reconnect, :max_delay) || DEFAULT_MAX_DELAY
+        Legion::Settings.dig(@settings_key, :reconnect, :max_delay) || DEFAULT_MAX_DELAY
       rescue StandardError
         DEFAULT_MAX_DELAY
       end

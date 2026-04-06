@@ -8,9 +8,9 @@ RSpec.describe 'Legion::Cache fallback' do
 
   before do
     Legion::Cache.instance_variable_set(:@client, nil)
-    Legion::Cache.instance_variable_set(:@connected, false)
-    Legion::Cache.instance_variable_set(:@using_local, false)
-    Legion::Cache.instance_variable_set(:@using_memory, false)
+    Legion::Cache.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(false))
+    Legion::Cache.instance_variable_set(:@using_local, Concurrent::AtomicBoolean.new(false))
+    Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(false))
     Legion::Cache.instance_variable_set(:@active_shared_driver, nil)
 
     allow(Legion::Cache::Local).to receive(:connected?).and_return(true)

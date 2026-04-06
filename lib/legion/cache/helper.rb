@@ -38,17 +38,17 @@ module Legion
 
       # --- Core Operations (shared tier) ---
 
-      def cache_set(key, value, ttl: nil, async: true, phi: false)
+      def cache_set(key, value, ttl: nil, phi: false)
         effective_ttl = ttl || cache_default_ttl
-        Legion::Cache.set(cache_namespace + key, value, ttl: effective_ttl, async: async, phi: phi)
+        Legion::Cache.set(cache_namespace + key, value, ttl: effective_ttl, async: false, phi: phi)
       end
 
       def cache_get(key)
         Legion::Cache.get(cache_namespace + key)
       end
 
-      def cache_delete(key, async: true)
-        Legion::Cache.delete(cache_namespace + key, async: async)
+      def cache_delete(key)
+        Legion::Cache.delete(cache_namespace + key, async: false)
       end
 
       def cache_fetch(key, ttl: nil, &)
@@ -85,12 +85,12 @@ module Legion
       # Stores multiple key-value pairs. Accepts a Hash of { key => value }.
       # TTL follows the same resolution chain as cache_set.
       # Delegates to Legion::Cache.mset on Redis; falls back to sequential sets on Memcached.
-      def cache_mset(hash, ttl: nil, async: true)
+      def cache_mset(hash, ttl: nil)
         return true if hash.empty?
 
         effective_ttl = ttl || cache_default_ttl
 
-        hash.each { |k, v| Legion::Cache.set(cache_namespace + k, v, ttl: effective_ttl, async: async) }
+        hash.each { |k, v| Legion::Cache.set(cache_namespace + k, v, ttl: effective_ttl, async: false) }
         true
       rescue StandardError => e
         log_cache_error('cache_mset', e)
@@ -109,12 +109,12 @@ module Legion
         {}
       end
 
-      def local_cache_mset(hash, ttl: nil, async: true) # rubocop:disable Lint/UnusedMethodArgument
+      def local_cache_mset(hash, ttl: nil)
         return true if hash.empty?
 
         effective_ttl = ttl || local_cache_default_ttl
 
-        hash.each { |k, v| Legion::Cache::Local.set(cache_namespace + k, v, ttl: effective_ttl) }
+        hash.each { |k, v| Legion::Cache::Local.set(cache_namespace + k, v, ttl: effective_ttl, async: false) }
         true
       rescue StandardError => e
         log_cache_error('local_cache_mset', e)
@@ -202,18 +202,18 @@ module Legion
 
       # --- Core Operations (local tier) ---
 
-      def local_cache_set(key, value, ttl: nil, async: true, phi: false) # rubocop:disable Lint/UnusedMethodArgument
+      def local_cache_set(key, value, ttl: nil, phi: false)
         effective_ttl = ttl || local_cache_default_ttl
         effective_ttl = Legion::Cache.enforce_phi_ttl(effective_ttl, phi: phi)
-        Legion::Cache::Local.set(cache_namespace + key, value, ttl: effective_ttl)
+        Legion::Cache::Local.set(cache_namespace + key, value, ttl: effective_ttl, async: false)
       end
 
       def local_cache_get(key)
         Legion::Cache::Local.get(cache_namespace + key)
       end
 
-      def local_cache_delete(key, async: true) # rubocop:disable Lint/UnusedMethodArgument
-        Legion::Cache::Local.delete(cache_namespace + key)
+      def local_cache_delete(key)
+        Legion::Cache::Local.delete(cache_namespace + key, async: false)
       end
 
       def local_cache_fetch(key, ttl: nil, &)

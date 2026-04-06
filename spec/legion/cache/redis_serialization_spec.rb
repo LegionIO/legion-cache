@@ -55,4 +55,28 @@ RSpec.describe 'Redis transparent serialization' do
       expect(cache.get('k')).to eq("J\x00not-valid-json{{{")
     end
   end
+
+  describe 'mget deserializes values' do
+    it 'deserializes prefixed values from mget' do
+      allow(redis).to receive(:mget).with('k1', 'k2').and_return(["S\x00hello".b, "J\x00{\"a\":1}".b])
+      result = cache.mget('k1', 'k2')
+      expect(result['k1']).to eq('hello')
+      expect(result['k2']).to be_a(Hash)
+    end
+
+    it 'handles nil values in mget' do
+      allow(redis).to receive(:mget).with('k1').and_return([nil])
+      result = cache.mget('k1')
+      expect(result['k1']).to be_nil
+    end
+  end
+
+  describe 'mset_sync serializes values' do
+    it 'serializes each value through set_sync' do
+      allow(redis).to receive(:set).and_return('OK')
+      cache.mset_sync({ 'k1' => 'hello', 'k2' => { a: 1 } }, ttl: 60)
+      expect(redis).to have_received(:set).with('k1', /\AS\x00/, any_args)
+      expect(redis).to have_received(:set).with('k2', /\AJ\x00/, any_args)
+    end
+  end
 end

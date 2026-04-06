@@ -22,7 +22,7 @@ RSpec.describe 'stats' do
         :driver, :servers, :enabled, :connected,
         :using_local, :using_memory,
         :pool_size, :pool_available,
-        :async_pool_size, :async_queue_depth, :async_processed,
+        :async_pool_size, :async_queue_depth, :async_processed, :async_failed,
         :reconnect_attempts, :uptime
       )
     end

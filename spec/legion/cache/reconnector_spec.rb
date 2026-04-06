@@ -78,6 +78,22 @@ RSpec.describe Legion::Cache::Reconnector do
     end
   end
 
+  describe 'can be required independently' do
+    it 'loads without NameError' do
+      expect { require 'legion/cache/reconnector' }.not_to raise_error
+    end
+  end
+
+  describe 'successful reconnect does not raise on attempt reset' do
+    let(:connect_block) { -> { connect_called.increment } }
+
+    it 'does not raise NoMethodError on attempt reset' do
+      reconnector.start
+      sleep 1.5
+      expect { reconnector.stop }.not_to raise_error
+    end
+  end
+
   describe 'respects enabled?' do
     let(:enabled_block) { -> { false } }
 

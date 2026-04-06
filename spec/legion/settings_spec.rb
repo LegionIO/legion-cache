@@ -75,6 +75,16 @@ RSpec.describe Legion::Cache::Settings do
     end
   end
 
+  describe 'pool_checkout_timeout' do
+    it 'has pool_checkout_timeout in global defaults' do
+      expect(Legion::Cache::Settings.default[:pool_checkout_timeout]).to eq(5)
+    end
+
+    it 'has pool_checkout_timeout in local defaults' do
+      expect(Legion::Cache::Settings.local[:pool_checkout_timeout]).to eq(5)
+    end
+  end
+
   describe 'async settings' do
     it 'includes async defaults' do
       expect(Legion::Cache::Settings.default[:async]).to include(

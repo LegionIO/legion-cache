@@ -12,11 +12,13 @@ module Legion
       DEFAULT_QUEUE_SIZE = 1000
       DEFAULT_SHUTDOWN_TIMEOUT = 5
 
-      def initialize(pool_size: nil, queue_size: nil, shutdown_timeout: nil)
+      def initialize(pool_size: nil, queue_size: nil, shutdown_timeout: nil, settings_key: :cache)
+        @settings_key = settings_key
         @config_pool_size = pool_size
         @config_queue_size = queue_size
         @config_shutdown_timeout = shutdown_timeout
         @processed = Concurrent::AtomicFixnum.new(0)
+        @failed = Concurrent::AtomicFixnum.new(0)
         @executor = nil
         @mutex = Mutex.new
       end
@@ -54,13 +56,14 @@ module Legion
       end
 
       def enqueue(&block)
-        if running?
-          @executor.post do
+        executor = @executor
+        if executor&.running?
+          executor.post do
             block.call
             @processed.increment
           rescue StandardError => e
             handle_exception(e, level: :warn, handled: true, operation: :async_writer_job)
-            @processed.increment
+            @failed.increment
           end
         else
           begin
@@ -68,7 +71,7 @@ module Legion
             @processed.increment
           rescue StandardError => e
             handle_exception(e, level: :warn, handled: true, operation: :async_writer_sync_fallback)
-            @processed.increment
+            @failed.increment
           end
         end
       end
@@ -89,12 +92,16 @@ module Legion
         @processed.value
       end
 
+      def failed_count
+        @failed.value
+      end
+
       private
 
       def configured_pool_size
         return DEFAULT_POOL_SIZE unless defined?(Legion::Settings)
 
-        Legion::Settings.dig(:cache, :async, :pool_size) || DEFAULT_POOL_SIZE
+        Legion::Settings.dig(@settings_key, :async, :pool_size) || DEFAULT_POOL_SIZE
       rescue StandardError
         DEFAULT_POOL_SIZE
       end
@@ -102,7 +109,7 @@ module Legion
       def configured_queue_size
         return DEFAULT_QUEUE_SIZE unless defined?(Legion::Settings)
 
-        Legion::Settings.dig(:cache, :async, :queue_size) || DEFAULT_QUEUE_SIZE
+        Legion::Settings.dig(@settings_key, :async, :queue_size) || DEFAULT_QUEUE_SIZE
       rescue StandardError
         DEFAULT_QUEUE_SIZE
       end
@@ -110,7 +117,7 @@ module Legion
       def configured_shutdown_timeout
         return DEFAULT_SHUTDOWN_TIMEOUT unless defined?(Legion::Settings)
 
-        Legion::Settings.dig(:cache, :async, :shutdown_timeout) || DEFAULT_SHUTDOWN_TIMEOUT
+        Legion::Settings.dig(@settings_key, :async, :shutdown_timeout) || DEFAULT_SHUTDOWN_TIMEOUT
       rescue StandardError
         DEFAULT_SHUTDOWN_TIMEOUT
       end

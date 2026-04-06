@@ -56,6 +56,34 @@ RSpec.describe Legion::Cache::AsyncWriter do
     end
   end
 
+  describe 'thread safety' do
+    it 'handles concurrent stop and enqueue without error' do
+      writer.start
+      errors = Concurrent::AtomicFixnum.new(0)
+      threads = 10.times.map do
+        Thread.new do
+          50.times { writer.enqueue { nil } }
+        rescue StandardError
+          errors.increment
+        end
+      end
+      sleep 0.05
+      writer.stop(timeout: 2)
+      threads.each(&:join)
+      expect(errors.value).to eq(0)
+    end
+  end
+
+  describe '#failed_count' do
+    it 'tracks failed jobs separately from processed' do
+      writer.start
+      writer.enqueue { raise 'boom' }
+      sleep 0.2
+      expect(writer.failed_count).to eq(1)
+      expect(writer.processed_count).to eq(0)
+    end
+  end
+
   describe '#pool_size' do
     it 'returns configured pool size' do
       writer.start(pool_size: 2)
