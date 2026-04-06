@@ -38,7 +38,7 @@ module Legion
         cache_opts[:ssl_context] = tls_ctx if tls_ctx
 
         checkout_timeout = opts[:pool_checkout_timeout] || settings[:pool_checkout_timeout] || @timeout
-        @client = ConnectionPool.new(size: pool_size, timeout: checkout_timeout) do
+        @client = ConnectionPool.new(size: @pool_size, timeout: checkout_timeout) do
           Dalli::Client.new(resolved, cache_opts)
         end
 
