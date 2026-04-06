@@ -10,11 +10,14 @@ require 'legion/cache/redis'
 require 'legion/cache/redis_hash'
 require 'legion/cache/memory'
 require 'legion/cache/local'
+require 'legion/cache/async_writer'
 require 'legion/cache/helper'
 
 module Legion
   module Cache
     extend Legion::Logging::Helper
+
+    @async_writer = Legion::Cache::AsyncWriter.new
 
     class << self
       include Legion::Logging::Helper
@@ -65,6 +68,8 @@ module Legion
 
         @setup_at = Time.now
 
+        async_writer.start
+
         if ENV['LEGION_MODE'] == 'lite'
           Legion::Cache::Memory.setup
           @using_memory = true
@@ -81,6 +86,7 @@ module Legion
 
       def shutdown
         log.info 'Shutting down Legion::Cache'
+        async_writer.stop
         if @using_memory
           Legion::Cache::Memory.shutdown
         else
@@ -158,11 +164,13 @@ module Legion
 
       def set(key, value, ttl: nil, async: true, phi: false)
         effective_ttl = resolve_ttl(ttl, phi: phi)
-        return Legion::Cache::Memory.set(key, value, ttl: effective_ttl) if @using_memory
-        return Legion::Cache::Local.set(key, value, ttl: effective_ttl) if @using_local
 
-        configure_shared_adapter!
-        set_sync(key, value, ttl: effective_ttl)
+        if async && async_writer.running?
+          async_writer.enqueue { set_internal(key, value, ttl: effective_ttl) }
+          true
+        else
+          set_internal(key, value, ttl: effective_ttl)
+        end
       end
 
       def set_sync(key, value, ttl: nil, **)
@@ -182,11 +190,12 @@ module Legion
       end
 
       def delete(key, async: true)
-        return Legion::Cache::Memory.delete(key) if @using_memory
-        return Legion::Cache::Local.delete(key) if @using_local
-
-        configure_shared_adapter!
-        delete_sync(key)
+        if async && async_writer.running?
+          async_writer.enqueue { delete_internal(key) }
+          true
+        else
+          delete_internal(key)
+        end
       end
 
       def delete_sync(key)
@@ -217,11 +226,13 @@ module Legion
 
       def mset(hash, ttl: nil, async: true)
         return true if hash.empty?
-        return hash.each { |key, value| Legion::Cache::Memory.set(key, value, ttl: ttl) } && true if @using_memory
-        return Legion::Cache::Local.mset(hash, ttl: ttl) if @using_local
 
-        configure_shared_adapter!
-        mset_sync(hash, ttl: ttl)
+        if async && async_writer.running?
+          async_writer.enqueue { mset_internal(hash, ttl: ttl) }
+          true
+        else
+          mset_internal(hash, ttl: ttl)
+        end
       end
 
       def mset_sync(hash, ttl: nil, **)
@@ -302,6 +313,34 @@ module Legion
       end
 
       private
+
+      def async_writer
+        Legion::Cache.instance_variable_get(:@async_writer)
+      end
+
+      def set_internal(key, value, ttl: nil)
+        return Legion::Cache::Memory.set(key, value, ttl: ttl) if @using_memory
+        return Legion::Cache::Local.set(key, value, ttl: ttl) if @using_local
+
+        configure_shared_adapter!
+        set_sync(key, value, ttl: ttl)
+      end
+
+      def delete_internal(key)
+        return Legion::Cache::Memory.delete(key) if @using_memory
+        return Legion::Cache::Local.delete(key) if @using_local
+
+        configure_shared_adapter!
+        delete_sync(key)
+      end
+
+      def mset_internal(hash, ttl: nil)
+        return hash.each { |key, value| Legion::Cache::Memory.set(key, value, ttl: ttl) } && true if @using_memory
+        return Legion::Cache::Local.mset(hash, ttl: ttl) if @using_local
+
+        configure_shared_adapter!
+        mset_sync(hash, ttl: ttl)
+      end
 
       def resolve_ttl(ttl, phi: false)
         effective = ttl || default_ttl
@@ -419,14 +458,20 @@ module Legion
       end
 
       def async_writer_pool_size
+        async_writer.pool_size
+      rescue StandardError
         0
       end
 
       def async_writer_queue_depth
+        async_writer.queue_depth
+      rescue StandardError
         0
       end
 
       def async_writer_processed_count
+        async_writer.processed_count
+      rescue StandardError
         0
       end
 
