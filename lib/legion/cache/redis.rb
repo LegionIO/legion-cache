@@ -78,7 +78,8 @@ module Legion
       end
 
       def get(key)
-        result = client.with { |conn| conn.get(key) }
+        raw = client.with { |conn| conn.get(key) }
+        result = deserialize_value(raw)
         log.debug { "[cache] GET #{key} hit=#{!result.nil?}" }
         result
       rescue StandardError => e
@@ -103,7 +104,8 @@ module Legion
         effective_ttl = ttl || default_ttl
         args = {}
         args[:ex] = effective_ttl unless effective_ttl.nil?
-        result = client.with { |conn| conn.set(key, value, **args) == 'OK' }
+        serialized = serialize_value(value)
+        result = client.with { |conn| conn.set(key, serialized, **args) == 'OK' }
         log.debug { "[cache] SET #{key} ttl=#{effective_ttl.inspect} success=#{result}" }
         result
       rescue StandardError => e
@@ -180,6 +182,33 @@ module Legion
       end
 
       private
+
+      SERIALIZE_STRING = "S\x00".b.freeze
+      SERIALIZE_JSON   = "J\x00".b.freeze
+
+      def serialize_value(value)
+        case value
+        when String
+          "#{SERIALIZE_STRING}#{value}"
+        else
+          "#{SERIALIZE_JSON}#{Legion::JSON.dump(value)}"
+        end
+      end
+
+      def deserialize_value(raw)
+        return nil if raw.nil?
+
+        if raw.start_with?(SERIALIZE_JSON)
+          Legion::JSON.load(raw.byteslice(2..))
+        elsif raw.start_with?(SERIALIZE_STRING)
+          raw.byteslice(2..)
+        else
+          raw # legacy data, no prefix
+        end
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :redis_deserialize)
+        raw
+      end
 
       def default_ttl
         return 3600 unless defined?(Legion::Settings)
