@@ -39,7 +39,17 @@ module Legion
           username:           nil,
           password:           nil,
           db:                 nil,
-          reconnect_attempts: [0, 0.5, 1].freeze
+          reconnect_attempts: [0, 0.5, 1].freeze,
+          async: {
+            pool_size:        4,
+            queue_size:       1000,
+            shutdown_timeout: 5
+          }.freeze,
+          reconnect: {
+            initial_delay: 1,
+            max_delay:     60,
+            enabled:       true
+          }.freeze
         }
       end
 

@@ -75,6 +75,26 @@ RSpec.describe Legion::Cache::Settings do
     end
   end
 
+  describe 'async settings' do
+    it 'includes async defaults' do
+      expect(Legion::Cache::Settings.default[:async]).to include(
+        pool_size: 4,
+        queue_size: 1000,
+        shutdown_timeout: 5
+      )
+    end
+  end
+
+  describe 'reconnect settings' do
+    it 'includes reconnect defaults' do
+      expect(Legion::Cache::Settings.default[:reconnect]).to include(
+        initial_delay: 1,
+        max_delay: 60,
+        enabled: true
+      )
+    end
+  end
+
   describe '.local' do
     subject(:locals) { described_class.local }
 
