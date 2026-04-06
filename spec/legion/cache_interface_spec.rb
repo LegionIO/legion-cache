@@ -63,4 +63,25 @@ RSpec.describe 'Legion::Cache interface' do
   it 'has fetch method' do
     expect(Legion::Cache.method(:fetch)).to be_a(Method)
   end
+
+  it 'set accepts keyword ttl and async' do
+    params = Legion::Cache.method(:set).parameters
+    names = params.map(&:last)
+    expect(names).to include(:ttl)
+    expect(names).to include(:async)
+  end
+
+  it 'delete accepts keyword async' do
+    params = Legion::Cache.method(:delete).parameters
+    names = params.map(&:last)
+    expect(names).to include(:async)
+  end
+
+  it 'flush takes no arguments' do
+    expect(Legion::Cache.method(:flush).arity).to eq(0)
+  end
+
+  it 'responds to enabled?' do
+    expect(Legion::Cache).to respond_to(:enabled?)
+  end
 end

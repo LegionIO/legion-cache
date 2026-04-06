@@ -43,22 +43,22 @@ RSpec.describe 'Legion::Cache PHI TTL policy' do
 
   describe 'Legion::Cache.set with phi: true option' do
     before do
-      allow(Legion::Cache::Memory).to receive(:set)
-      Legion::Cache.instance_variable_set(:@using_memory, true)
+      allow(Legion::Cache::Memory).to receive(:set).with(anything, anything, ttl: anything)
+      Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(true))
     end
 
     after do
-      Legion::Cache.instance_variable_set(:@using_memory, false)
+      Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(false))
     end
 
     it 'enforces phi max ttl before delegating to memory adapter' do
-      Legion::Cache.set('phi:task:99', 'value', 7200, phi: true)
-      expect(Legion::Cache::Memory).to have_received(:set).with('phi:task:99', 'value', 3600)
+      Legion::Cache.set('phi:task:99', 'value', ttl: 7200, phi: true, async: false)
+      expect(Legion::Cache::Memory).to have_received(:set).with('phi:task:99', 'value', ttl: 3600)
     end
 
     it 'passes original ttl when phi is not set' do
-      Legion::Cache.set('task:99', 'value', 7200)
-      expect(Legion::Cache::Memory).to have_received(:set).with('task:99', 'value', 7200)
+      Legion::Cache.set('task:99', 'value', ttl: 7200, async: false)
+      expect(Legion::Cache::Memory).to have_received(:set).with('task:99', 'value', ttl: 7200)
     end
   end
 end

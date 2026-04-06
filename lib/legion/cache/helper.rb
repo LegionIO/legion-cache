@@ -7,7 +7,7 @@ module Legion
     module Helper
       include Legion::Logging::Helper
 
-      FALLBACK_TTL = 60
+      FALLBACK_TTL = 3600
 
       # --- TTL Resolution ---
       # Override in your LEX to set a custom default TTL for the extension.
@@ -40,7 +40,7 @@ module Legion
 
       def cache_set(key, value, ttl: nil, phi: false)
         effective_ttl = ttl || cache_default_ttl
-        Legion::Cache.set(cache_namespace + key, value, effective_ttl, phi: phi)
+        Legion::Cache.set(cache_namespace + key, value, ttl: effective_ttl, async: false, phi: phi)
       end
 
       def cache_get(key)
@@ -48,12 +48,12 @@ module Legion
       end
 
       def cache_delete(key)
-        Legion::Cache.delete(cache_namespace + key)
+        Legion::Cache.delete(cache_namespace + key, async: false)
       end
 
       def cache_fetch(key, ttl: nil, &)
         effective_ttl = ttl || cache_default_ttl
-        Legion::Cache.fetch(cache_namespace + key, effective_ttl, &)
+        Legion::Cache.fetch(cache_namespace + key, ttl: effective_ttl, &)
       end
 
       def cache_exist?(key)
@@ -90,7 +90,7 @@ module Legion
 
         effective_ttl = ttl || cache_default_ttl
 
-        hash.each { |k, v| Legion::Cache.set(cache_namespace + k, v, effective_ttl) }
+        hash.each { |k, v| Legion::Cache.set(cache_namespace + k, v, ttl: effective_ttl, async: false) }
         true
       rescue StandardError => e
         log_cache_error('cache_mset', e)
@@ -114,7 +114,7 @@ module Legion
 
         effective_ttl = ttl || local_cache_default_ttl
 
-        hash.each { |k, v| Legion::Cache::Local.set(cache_namespace + k, v, effective_ttl) }
+        hash.each { |k, v| Legion::Cache::Local.set(cache_namespace + k, v, ttl: effective_ttl, async: false) }
         true
       rescue StandardError => e
         log_cache_error('local_cache_mset', e)
@@ -205,7 +205,7 @@ module Legion
       def local_cache_set(key, value, ttl: nil, phi: false)
         effective_ttl = ttl || local_cache_default_ttl
         effective_ttl = Legion::Cache.enforce_phi_ttl(effective_ttl, phi: phi)
-        Legion::Cache::Local.set(cache_namespace + key, value, effective_ttl)
+        Legion::Cache::Local.set(cache_namespace + key, value, ttl: effective_ttl, async: false)
       end
 
       def local_cache_get(key)
@@ -213,12 +213,12 @@ module Legion
       end
 
       def local_cache_delete(key)
-        Legion::Cache::Local.delete(cache_namespace + key)
+        Legion::Cache::Local.delete(cache_namespace + key, async: false)
       end
 
       def local_cache_fetch(key, ttl: nil, &)
         effective_ttl = ttl || local_cache_default_ttl
-        Legion::Cache::Local.fetch(cache_namespace + key, effective_ttl, &)
+        Legion::Cache::Local.fetch(cache_namespace + key, ttl: effective_ttl, &)
       end
 
       def local_cache_exist?(key)
@@ -312,7 +312,7 @@ module Legion
       def memcached_hash_merge(full_key, new_fields)
         current = memcached_hash_load(full_key) || {}
         merged = current.merge(new_fields.transform_keys(&:to_s))
-        Legion::Cache.set(full_key, Legion::JSON.dump(merged), cache_default_ttl)
+        Legion::Cache.set(full_key, Legion::JSON.dump(merged), ttl: cache_default_ttl, async: false)
         true
       end
 
@@ -335,7 +335,7 @@ module Legion
         str_fields = fields.map(&:to_s)
         removed = str_fields.count { |f| current.key?(f) }
         str_fields.each { |f| current.delete(f) }
-        Legion::Cache.set(full_key, Legion::JSON.dump(current), cache_default_ttl)
+        Legion::Cache.set(full_key, Legion::JSON.dump(current), ttl: cache_default_ttl, async: false)
         removed
       end
 

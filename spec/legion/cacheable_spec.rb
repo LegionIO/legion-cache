@@ -119,11 +119,11 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
 
       it 'writes to Local cache' do
         described_class.cache_write('local.w', 'data', ttl: 60, scope: :local)
-        expect(Legion::Cache::Local).to have_received(:set).with('local.w', 'data', 60)
+        expect(Legion::Cache::Local).to have_received(:set).with('local.w', 'data', ttl: 60, async: false)
       end
 
       it 'falls back to memory when Local writes raise' do
-        allow(Legion::Cache::Local).to receive(:set).with('local.error', 'data', 60).and_raise(StandardError, 'boom')
+        allow(Legion::Cache::Local).to receive(:set).with('local.error', 'data', ttl: 60, async: false).and_raise(StandardError, 'boom')
 
         described_class.cache_write('local.error', 'data', ttl: 60, scope: :local)
         expect(described_class.memory_read('local.error')).to eq('data')
@@ -156,7 +156,7 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
 
       it 'writes to global cache' do
         described_class.cache_write('global.w', 'data', ttl: 120, scope: :global)
-        expect(Legion::Cache).to have_received(:set).with('global.w', 'data', 120)
+        expect(Legion::Cache).to have_received(:set).with('global.w', 'data', ttl: 120, async: false)
       end
     end
   end

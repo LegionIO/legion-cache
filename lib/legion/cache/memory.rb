@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'concurrent'
 require 'legion/logging/helper'
 
 module Legion
@@ -11,18 +12,31 @@ module Legion
       @store = {}
       @expiry = {}
       @mutex = Mutex.new
-      @connected = false
+      @connected = Concurrent::AtomicBoolean.new(false)
 
       def setup(**)
-        @connected = true
+        @connected.make_true
         log.info 'Legion::Cache::Memory connected'
-        @connected
+        true
+      rescue StandardError => e
+        @connected.make_false
+        handle_exception(e, level: :warn, handled: true, operation: :memory_setup)
+        false
       end
 
       def client(**) = self
 
       def connected?
-        @connected
+        @connected.true?
+      end
+
+      def restart(**)
+        shutdown
+        setup
+      rescue StandardError => e
+        @connected.make_false
+        handle_exception(e, level: :warn, handled: true, operation: :memory_restart)
+        false
       end
 
       def get(key)
@@ -32,9 +46,17 @@ module Legion
           log.debug { "[cache:memory] GET #{key} hit=#{!result.nil?}" }
           result
         end
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :memory_get)
+        nil
       end
 
-      def set(key, value, ttl = nil)
+      def set(key, value, ttl: nil, async: true, phi: false) # rubocop:disable Lint/UnusedMethodArgument
+        set_sync(key, value, ttl: ttl, phi: phi)
+      end
+
+      def set_sync(key, value, ttl: nil, phi: false)
+        ttl = enforce_phi_ttl(ttl, phi: phi) if phi
         @mutex.synchronize do
           @store[key] = value
           if ttl&.positive?
@@ -43,55 +65,109 @@ module Legion
             @expiry.delete(key)
           end
           log.debug { "[cache:memory] SET #{key} ttl=#{ttl.inspect}" }
-          value
+          true
         end
       end
 
-      def fetch(key, ttl = nil)
+      def fetch(key, ttl: nil, &block)
         val = get(key)
         return val unless val.nil?
 
         log.debug { "[cache:memory] FETCH #{key} miss=true" }
-        val = yield if block_given?
-        set(key, val, ttl)
+        val = block&.call
+        set(key, val, ttl: ttl)
         val
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :memory_fetch)
+        nil
       end
 
-      def delete(key)
+      def delete(key, async: true) # rubocop:disable Lint/UnusedMethodArgument
+        delete_sync(key)
+      end
+
+      def delete_sync(key)
         @mutex.synchronize do
           removed = @store.delete(key)
           @expiry.delete(key)
           log.debug { "[cache:memory] DELETE #{key} success=#{!removed.nil?}" }
-          removed
+          !removed.nil?
         end
       end
 
-      def flush(_delay = 0)
-        result = @mutex.synchronize do
+      def mget(*keys)
+        keys = keys.flatten
+        return {} if keys.empty?
+
+        @mutex.synchronize do
+          keys.each { |k| expire_if_needed(k) }
+          keys.to_h { |k| [k, @store[k]] }
+        end
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :memory_mget)
+        {}
+      end
+
+      def mset(hash, ttl: nil, async: true)
+        return true if hash.empty?
+
+        hash.each { |k, v| set(k, v, ttl: ttl, async: async) }
+        true
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :memory_mset)
+        true
+      end
+
+      def mset_sync(hash, ttl: nil, phi: false)
+        return true if hash.empty?
+
+        @mutex.synchronize do
+          hash.each do |key, value|
+            effective_ttl = phi ? enforce_phi_ttl(ttl, phi: true) : ttl
+            @store[key] = value
+            if effective_ttl&.positive?
+              @expiry[key] = Time.now + effective_ttl
+            else
+              @expiry.delete(key)
+            end
+          end
+          true
+        end
+      end
+
+      def flush
+        @mutex.synchronize do
           @store.clear
           @expiry.clear
         end
         log.info 'Legion::Cache::Memory flushed'
-        result
+        true
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :memory_flush)
+        false
       end
 
       def close = nil
 
       def shutdown
         flush
-        @connected = false
+        @connected.make_false
         log.info 'Legion::Cache::Memory shut down'
-        @connected
+        false
+      rescue StandardError => e
+        @connected.make_false
+        handle_exception(e, level: :warn, handled: true, operation: :memory_shutdown)
+        false
       end
 
       def reset!
-        result = @mutex.synchronize do
+        @mutex.synchronize do
+          @connected.make_false
           @store.clear
           @expiry.clear
-          @connected = false
         end
         log.info 'Legion::Cache::Memory state reset'
-        result
+        false
       end
 
       def size = 1
@@ -105,6 +181,18 @@ module Legion
         @store.delete(key)
         @expiry.delete(key)
         log.debug { "[cache:memory] EXPIRE #{key}" }
+      end
+
+      def enforce_phi_ttl(ttl, phi: false)
+        return ttl unless phi
+
+        max = if defined?(Legion::Settings)
+                Legion::Settings.dig(:cache, :compliance, :phi_max_ttl) || 3600
+              else
+                3600
+              end
+        result = ttl.nil? ? max : [ttl, max].min
+        [result, 1].max
       end
     end
   end

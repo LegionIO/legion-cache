@@ -12,34 +12,38 @@ module Legion
       extend self
       extend Legion::Logging::Helper
 
-      def client(server: nil, servers: nil, logger: nil, **opts)
+      def client(server: nil, servers: nil, pool_size: nil, timeout: nil, # rubocop:disable Metrics/CyclomaticComplexity,Metrics/PerceivedComplexity,Metrics/ParameterLists
+                 username: nil, password: nil, logger: nil, **opts)
         return @client unless @client.nil?
 
         settings = defined?(Legion::Settings) ? Legion::Settings[:cache] : {}
         servers ||= settings[:servers] || []
         @component_logger = logger || log
 
-        @pool_size = opts.key?(:pool_size) ? opts[:pool_size] : settings[:pool_size] || 10
-        @timeout = opts.key?(:timeout) ? opts[:timeout] : settings[:timeout] || 5
+        @pool_size = pool_size || settings[:pool_size] || 10
+        @timeout = timeout || settings[:timeout] || 5
 
         resolved = Legion::Cache::Settings.resolve_servers(
           driver: 'memcached', server: server, servers: Array(servers)
         )
 
-        Dalli.logger = shared_dalli_logger
+        Dalli.logger = log
         cache_opts = settings.merge(opts)
         cache_opts[:value_max_bytes] ||= 8 * 1024 * 1024
         cache_opts[:serializer] ||= Legion::JSON
+        cache_opts[:username] = username unless username.nil?
+        cache_opts[:password] = password unless password.nil?
 
         tls_ctx = memcached_tls_context(port: resolved.first.split(':').last.to_i)
         cache_opts[:ssl_context] = tls_ctx if tls_ctx
 
-        @client = ConnectionPool.new(size: pool_size, timeout: timeout) do
+        checkout_timeout = opts[:pool_checkout_timeout] || settings[:pool_checkout_timeout] || @timeout
+        @client = ConnectionPool.new(size: @pool_size, timeout: checkout_timeout) do
           Dalli::Client.new(resolved, cache_opts)
         end
 
         @connected = true
-        cache_logger.info "Memcached connected to #{resolved.join(', ')}"
+        log.info "Memcached connected to #{resolved.join(', ')}"
         @client
       rescue StandardError => e
         handle_exception(e, level: :error, handled: false, operation: :memcached_client,
@@ -50,14 +54,14 @@ module Legion
 
       def get(key)
         result = client.with { |conn| conn.get(key) }
-        cache_logger.debug "[cache] GET #{key} hit=#{!result.nil?}"
+        log.debug { "[cache] GET #{key} hit=#{!result.nil?}" }
         result
       rescue StandardError => e
-        handle_exception(e, level: :warn, handled: false, operation: :memcached_get, key: key)
-        raise
+        handle_exception(e, level: :warn, handled: true, operation: :memcached_get, key: key)
+        nil
       end
 
-      def fetch(key, ttl = nil, &)
+      def fetch(key, ttl: nil, &)
         result = client.with do |conn|
           if block_given?
             conn.fetch(key, ttl, &)
@@ -65,38 +69,47 @@ module Legion
             conn.fetch(key, ttl)
           end
         end
-        cache_logger.debug "[cache] FETCH #{key} hit=#{!result.nil?}"
+        log.debug { "[cache] FETCH #{key} hit=#{!result.nil?}" }
         result
       rescue StandardError => e
-        handle_exception(e, level: :warn, handled: false, operation: :memcached_fetch, key: key, ttl: ttl)
+        handle_exception(e, level: :warn, handled: true, operation: :memcached_fetch, key: key, ttl: ttl)
+        nil
+      end
+
+      def set(key, value, ttl: nil, **)
+        set_sync(key, value, ttl: ttl, **)
+      end
+
+      def set_sync(key, value, ttl: nil, **)
+        effective_ttl = ttl || default_ttl
+        result = client.with { |conn| conn.set(key, value, effective_ttl).positive? }
+        log.debug { "[cache] SET #{key} ttl=#{effective_ttl} success=#{result} value_class=#{value.class}" }
+        result
+      rescue StandardError => e
+        handle_exception(e, level: :error, handled: false, operation: :memcached_set_sync, key: key, ttl: effective_ttl)
         raise
       end
 
-      def set(key, value, ttl = 180)
-        result = client.with { |conn| conn.set(key, value, ttl).positive? }
-        cache_logger.debug "[cache] SET #{key} ttl=#{ttl} success=#{result} value_class=#{value.class}"
-        result
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: false, operation: :memcached_set, key: key, ttl: ttl)
-        raise
+      def delete(key, **)
+        delete_sync(key)
       end
 
-      def delete(key)
+      def delete_sync(key)
         result = client.with { |conn| conn.delete(key) == true }
-        cache_logger.debug "[cache] DELETE #{key} success=#{result}"
+        log.debug { "[cache] DELETE #{key} success=#{result}" }
         result
       rescue StandardError => e
-        handle_exception(e, level: :warn, handled: false, operation: :memcached_delete, key: key)
+        handle_exception(e, level: :error, handled: false, operation: :memcached_delete_sync, key: key)
         raise
       end
 
-      def flush(delay = 0)
-        result = client.with { |conn| conn.flush(delay).first }
-        cache_logger.debug '[cache] FLUSH completed'
+      def flush
+        result = client.with { |conn| conn.flush.first }
+        log.debug { '[cache] FLUSH completed' }
         result
       rescue StandardError => e
-        handle_exception(e, level: :warn, handled: false, operation: :memcached_flush, delay: delay)
-        raise
+        handle_exception(e, level: :warn, handled: true, operation: :memcached_flush)
+        nil
       end
 
       def mget(*keys)
@@ -104,36 +117,36 @@ module Legion
         return {} if keys.empty?
 
         result = client.with { |conn| conn.get_multi(*keys) }
-        cache_logger.debug "[cache] MGET keys=#{keys.size} hits=#{result.size}"
+        log.debug { "[cache] MGET keys=#{keys.size} hits=#{result.size}" }
         result
       rescue StandardError => e
-        handle_exception(e, level: :warn, handled: false, operation: :memcached_mget, key_count: keys.size)
-        raise
+        handle_exception(e, level: :warn, handled: true, operation: :memcached_mget, key_count: keys.size)
+        {}
       end
 
-      def mset(hash)
+      def mset(hash, ttl: nil, **)
+        mset_sync(hash, ttl: ttl)
+      end
+
+      def mset_sync(hash, ttl: nil, **) # rubocop:disable Lint/UnusedMethodArgument
         return true if hash.empty?
 
         client.with { |conn| conn.set_multi(hash) }
-        cache_logger.debug "[cache] MSET keys=#{hash.size}"
+        log.debug { "[cache] MSET keys=#{hash.size}" }
         true
       rescue StandardError => e
-        handle_exception(e, level: :warn, handled: false, operation: :memcached_mset, key_count: hash.size)
+        handle_exception(e, level: :error, handled: false, operation: :memcached_mset_sync, key_count: hash.size)
         raise
       end
 
       private
 
-      def cache_logger
-        @component_logger || log
-      end
+      def default_ttl
+        return 3600 unless defined?(Legion::Settings)
 
-      def shared_dalli_logger
-        if defined?(Legion::Cache) && Legion::Cache.respond_to?(:log)
-          Legion::Cache.log
-        else
-          cache_logger
-        end
+        Legion::Settings.dig(:cache, :default_ttl) || 3600
+      rescue StandardError
+        3600
       end
 
       def memcached_tls_context(port:)

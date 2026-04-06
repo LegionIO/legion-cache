@@ -17,13 +17,13 @@ RSpec.describe Legion::Cache::Memory do
     end
 
     it 'expires values after TTL' do
-      described_class.set('expire-me', 'data', 0.1)
+      described_class.set('expire-me', 'data', ttl: 0.1)
       sleep 0.15
       expect(described_class.get('expire-me')).to be_nil
     end
 
     it 'clears stale expiry when a key is rewritten without TTL' do
-      described_class.set('refresh-me', 'old', 0.05)
+      described_class.set('refresh-me', 'old', ttl: 0.05)
       described_class.set('refresh-me', 'new')
       sleep 0.06
 
@@ -75,6 +75,26 @@ RSpec.describe Legion::Cache::Memory do
       described_class.setup
       described_class.shutdown
       expect(described_class.connected?).to be false
+    end
+  end
+
+  describe 'keyword ttl' do
+    before { described_class.setup }
+
+    it 'accepts ttl as keyword arg on set' do
+      described_class.set('kw', 'val', ttl: 300)
+      expect(described_class.get('kw')).to eq('val')
+    end
+
+    it 'accepts ttl as keyword arg on fetch' do
+      result = described_class.fetch('fkw', ttl: 300) { 'fetched' }
+      expect(result).to eq('fetched')
+    end
+  end
+
+  describe 'flush takes no arguments' do
+    it 'has arity 0' do
+      expect(described_class.method(:flush).arity).to eq(0)
     end
   end
 

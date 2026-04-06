@@ -10,7 +10,10 @@ module Legion
       extend Legion::Logging::Helper
 
       def connected?
-        @connected ||= false
+        return false unless defined?(@connected)
+        return @connected.true? if @connected.respond_to?(:true?)
+
+        @connected == true
       end
 
       def size

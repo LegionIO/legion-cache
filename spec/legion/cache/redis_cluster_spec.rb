@@ -176,15 +176,15 @@ RSpec.describe Legion::Cache::Redis, 'cluster mode' do
       expect(described_class).not_to receive(:set)
       fetch_block = proc { 'computed' }
 
-      expect(described_class.fetch('fetch-key', 60, &fetch_block)).to eq('cached')
+      expect(described_class.fetch('fetch-key', ttl: 60, &fetch_block)).to eq('cached')
     end
 
     it 'stores and returns the computed value on miss' do
       allow(described_class).to receive(:get).with('fetch-key').and_return(nil)
-      expect(described_class).to receive(:set).with('fetch-key', 'computed', 60).and_return(true)
+      expect(described_class).to receive(:set).with('fetch-key', 'computed', ttl: 60).and_return(true)
       fetch_block = proc { 'computed' }
 
-      expect(described_class.fetch('fetch-key', 60, &fetch_block)).to eq('computed')
+      expect(described_class.fetch('fetch-key', ttl: 60, &fetch_block)).to eq('computed')
     end
   end
 
@@ -201,40 +201,15 @@ RSpec.describe Legion::Cache::Redis, 'cluster mode' do
     context 'standalone mode' do
       before { described_class.instance_variable_set(:@cluster_mode, false) }
 
-      it 'sets all key-value pairs' do
-        allow(redis_conn).to receive(:mset).with('a', '1', 'b', '2').and_return('OK')
+      it 'sets all key-value pairs via set_sync' do
+        allow(redis_conn).to receive(:set).and_return('OK')
         result = described_class.mset({ 'a' => '1', 'b' => '2' })
         expect(result).to eq true
+        expect(redis_conn).to have_received(:set).twice
       end
 
       it 'returns true for empty hash' do
         result = described_class.mset({})
-        expect(result).to eq true
-      end
-    end
-
-    context 'cluster mode' do
-      before { described_class.instance_variable_set(:@cluster_mode, true) }
-
-      it 'groups keys by slot and sets per group' do
-        converter = class_double('Redis::Cluster::KeySlotConverter').as_stubbed_const
-        allow(converter).to receive(:convert).with('a').and_return(0)
-        allow(converter).to receive(:convert).with('b').and_return(1)
-
-        allow(redis_conn).to receive(:mset).with('a', '1').and_return('OK')
-        allow(redis_conn).to receive(:mset).with('b', '2').and_return('OK')
-
-        result = described_class.mset({ 'a' => '1', 'b' => '2' })
-        expect(result).to eq true
-      end
-
-      it 'handles same-slot keys in single call' do
-        converter = class_double('Redis::Cluster::KeySlotConverter').as_stubbed_const
-        allow(converter).to receive(:convert).and_return(5)
-
-        allow(redis_conn).to receive(:mset).with('x', '10', 'y', '20').and_return('OK')
-
-        result = described_class.mset({ 'x' => '10', 'y' => '20' })
         expect(result).to eq true
       end
     end
@@ -251,82 +226,34 @@ RSpec.describe Legion::Cache::Redis, 'cluster mode' do
       allow(pool).to receive(:with).and_yield(redis_conn)
     end
 
-    it 'routes get failures through handle_exception and re-raises' do
+    it 'get returns nil on failure (handled)' do
       allow(redis_conn).to receive(:get).and_raise(Redis::BaseError, 'node down')
-      allow(described_class).to receive(:handle_exception)
-      expect { described_class.send(:get, 'key') }.to raise_error(Redis::BaseError)
-      expect(described_class).to have_received(:handle_exception).with(
-        an_instance_of(Redis::BaseError),
-        level:     :warn,
-        handled:   false,
-        operation: 'redis_get',
-        key:       'key'
-      )
+      expect(described_class.get('key')).to be_nil
     end
 
-    it 'routes set failures through handle_exception and re-raises' do
+    it 'set_sync re-raises on failure' do
       allow(redis_conn).to receive(:set).and_raise(Redis::BaseError, 'write failed')
-      allow(described_class).to receive(:handle_exception)
-      expect { described_class.send(:set, 'key', 'val') }.to raise_error(Redis::BaseError)
-      expect(described_class).to have_received(:handle_exception).with(
-        an_instance_of(Redis::BaseError),
-        level:     :warn,
-        handled:   false,
-        operation: 'redis_set',
-        key:       'key',
-        ttl:       nil
-      )
+      expect { described_class.set_sync('key', 'val', ttl: 60) }.to raise_error(Redis::BaseError)
     end
 
-    it 'routes delete failures through handle_exception and re-raises' do
+    it 'delete_sync re-raises on failure' do
       allow(redis_conn).to receive(:del).and_raise(Redis::BaseError, 'conn lost')
-      allow(described_class).to receive(:handle_exception)
-      expect { described_class.send(:delete, 'key') }.to raise_error(Redis::BaseError)
-      expect(described_class).to have_received(:handle_exception).with(
-        an_instance_of(Redis::BaseError),
-        level:     :warn,
-        handled:   false,
-        operation: 'redis_delete',
-        key:       'key'
-      )
+      expect { described_class.delete_sync('key') }.to raise_error(Redis::BaseError)
     end
 
-    it 'routes mget failures through handle_exception and re-raises' do
+    it 'mget returns empty hash on failure (handled)' do
       allow(redis_conn).to receive(:mget).and_raise(Redis::BaseError, 'cluster fail')
-      allow(described_class).to receive(:handle_exception)
-      expect { described_class.mget('a') }.to raise_error(Redis::BaseError)
-      expect(described_class).to have_received(:handle_exception).with(
-        an_instance_of(Redis::BaseError),
-        level:     :warn,
-        handled:   false,
-        operation: 'redis_mget',
-        key_count: 1
-      )
+      expect(described_class.mget('a')).to eq({})
     end
 
-    it 'routes mset failures through handle_exception and re-raises' do
-      allow(redis_conn).to receive(:mset).and_raise(Redis::BaseError, 'cluster fail')
-      allow(described_class).to receive(:handle_exception)
-      expect { described_class.mset({ 'a' => '1' }) }.to raise_error(Redis::BaseError)
-      expect(described_class).to have_received(:handle_exception).with(
-        an_instance_of(Redis::BaseError),
-        level:     :warn,
-        handled:   false,
-        operation: 'redis_mset',
-        key_count: 1
-      )
+    it 'mset_sync re-raises on failure' do
+      allow(redis_conn).to receive(:set).and_raise(Redis::BaseError, 'write fail')
+      expect { described_class.mset_sync({ 'a' => '1' }) }.to raise_error(Redis::BaseError)
     end
 
-    it 'routes flush failures through handle_exception and re-raises' do
+    it 'flush returns nil on failure (handled)' do
       allow(redis_conn).to receive(:flushdb).and_raise(Redis::BaseError, 'flush fail')
-      allow(described_class).to receive(:handle_exception)
-      expect { described_class.flush }.to raise_error(Redis::BaseError)
-      expect(described_class).to have_received(:handle_exception).with(
-        an_instance_of(Redis::BaseError),
-        level:     :warn,
-        handled:   false,
-        operation: 'redis_flush'
-      )
+      expect(described_class.flush).to be_nil
     end
   end
 
@@ -344,17 +271,36 @@ RSpec.describe Legion::Cache::Redis, 'cluster mode' do
     it 'flushes all primary nodes' do
       node_info = "abc123 10.0.0.1:6379@16379 master - 0 0 1 connected 0-5460\ndef456 10.0.0.2:6379@16379 master - 0 0 2 connected 5461-10922\n"
       allow(redis_conn).to receive(:cluster).with('nodes').and_return(node_info)
+      described_class.instance_variable_set(:@connection_opts, {})
 
       node1 = instance_double(Redis)
       node2 = instance_double(Redis)
-      allow(Redis).to receive(:new).with(host: '10.0.0.1', port: 6379).and_return(node1)
-      allow(Redis).to receive(:new).with(host: '10.0.0.2', port: 6379).and_return(node2)
+      allow(Redis).to receive(:new).with(hash_including(host: '10.0.0.1', port: 6379)).and_return(node1)
+      allow(Redis).to receive(:new).with(hash_including(host: '10.0.0.2', port: 6379)).and_return(node2)
       allow(node1).to receive(:flushdb)
       allow(node1).to receive(:close)
       allow(node2).to receive(:flushdb)
       allow(node2).to receive(:close)
 
       expect(described_class.flush).to eq true
+    end
+
+    it 'passes credentials to per-node connections' do
+      cache = described_class.dup
+      cache.instance_variable_set(:@client, pool)
+      cache.instance_variable_set(:@connected, true)
+      cache.instance_variable_set(:@cluster_mode, true)
+      cache.instance_variable_set(:@connection_opts, { username: 'user', password: 'pass' })
+
+      node_info = "abc123 10.0.0.1:6379@16379 myself,master - 0 0 1 connected 0-5460\n"
+      allow(redis_conn).to receive(:cluster).with('nodes').and_return(node_info)
+
+      node_client = instance_double(Redis)
+      expect(Redis).to receive(:new).with(hash_including(host: '10.0.0.1', port: 6379, username: 'user', password: 'pass')).and_return(node_client)
+      allow(node_client).to receive(:flushdb)
+      allow(node_client).to receive(:close)
+
+      cache.flush
     end
 
     it 'falls back to single flushdb on cluster nodes error' do

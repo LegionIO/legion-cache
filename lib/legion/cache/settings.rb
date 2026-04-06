@@ -19,50 +19,63 @@ module Legion
 
       def self.default
         {
-          driver:             driver,
-          servers:            [],
-          connected:          false,
-          enabled:            true,
-          namespace:          'legion',
-          compress:           false,
-          failover:           true,
-          threadsafe:         true,
-          expires_in:         0,
-          cache_nils:         false,
-          pool_size:          10,
-          timeout:            5,
-          default_ttl:        60,
-          serializer:         Legion::JSON,
-          cluster:            nil,
-          replica:            false,
-          fixed_hostname:     nil,
-          username:           nil,
-          password:           nil,
-          db:                 nil,
-          reconnect_attempts: [0, 0.5, 1].freeze
+          driver:                driver,
+          servers:               [],
+          connected:             false,
+          enabled:               true,
+          namespace:             'legion',
+          compress:              false,
+          failover:              true,
+          threadsafe:            true,
+          expires_in:            0,
+          cache_nils:            false,
+          pool_size:             10,
+          timeout:               5,
+          pool_checkout_timeout: 5,
+          default_ttl:           3600,
+          failback_to_local:     true,
+          serializer:            Legion::JSON,
+          cluster:               nil,
+          replica:               false,
+          fixed_hostname:        nil,
+          username:              nil,
+          password:              nil,
+          db:                    nil,
+          reconnect_attempts:    [0, 0.5, 1].freeze,
+          async:                 {
+            pool_size:        4,
+            queue_size:       1000,
+            shutdown_timeout: 5
+          }.freeze,
+          reconnect:             {
+            initial_delay: 1,
+            max_delay:     60,
+            enabled:       true
+          }.freeze
         }
       end
 
       def self.local
         {
-          driver:             driver,
-          servers:            [],
-          connected:          false,
-          enabled:            true,
-          namespace:          'legion_local',
-          compress:           false,
-          failover:           true,
-          threadsafe:         true,
-          expires_in:         0,
-          cache_nils:         false,
-          pool_size:          5,
-          timeout:            3,
-          default_ttl:        60,
-          serializer:         Legion::JSON,
-          username:           nil,
-          password:           nil,
-          db:                 nil,
-          reconnect_attempts: [0, 0.25, 0.5].freeze
+          driver:                driver,
+          servers:               [],
+          connected:             false,
+          enabled:               true,
+          namespace:             'legion_local',
+          compress:              false,
+          failover:              true,
+          threadsafe:            true,
+          expires_in:            0,
+          cache_nils:            false,
+          pool_size:             5,
+          timeout:               3,
+          pool_checkout_timeout: 5,
+          default_ttl:           21_600,
+          serializer:            Legion::JSON,
+          username:              nil,
+          password:              nil,
+          db:                    nil,
+          reconnect_attempts:    [0, 0.25, 0.5].freeze
         }
       end
 

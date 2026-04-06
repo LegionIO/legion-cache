@@ -13,24 +13,37 @@ module Legion
       extend self
       extend Legion::Logging::Helper
 
-      def client(pool_size: 20, timeout: 5, server: nil, servers: [], cluster: nil, replica: false, # rubocop:disable Metrics/ParameterLists
-                 logger: nil,
-                 fixed_hostname: nil, username: nil, password: nil, db: nil, reconnect_attempts: [0, 0.5, 1], **)
+      def client(server: nil, servers: [], pool_size: nil, timeout: nil, # rubocop:disable Metrics/ParameterLists
+                 username: nil, password: nil, logger: nil, **opts)
         return @client unless @client.nil?
+
+        settings = defined?(Legion::Settings) ? Legion::Settings[:cache] : {}
+        pool_size ||= settings[:pool_size] || 10
+        timeout ||= settings[:timeout] || 5
+
+        cluster = opts.delete(:cluster)
+        replica = opts.delete(:replica) || false
+        fixed_hostname = opts.delete(:fixed_hostname)
+        db = opts.delete(:db)
+        reconnect_attempts = opts.delete(:reconnect_attempts) || [0, 0.5, 1]
 
         @pool_size = pool_size
         @timeout   = timeout
         @cluster_mode = Array(cluster).compact.any?
         @component_logger = logger || log
 
-        @client = ConnectionPool.new(size: pool_size, timeout: timeout) do
+        @connection_opts = { username: username, password: password, timeout: @timeout }.compact
+        @connection_opts.merge!(redis_tls_options(port: resolve_primary_port(server: server, servers: servers, cluster: cluster)))
+
+        checkout_timeout = opts[:pool_checkout_timeout] || settings[:pool_checkout_timeout] || @timeout
+        @client = ConnectionPool.new(size: pool_size, timeout: checkout_timeout) do
           build_redis_client(server: server, servers: servers, cluster: cluster,
                              replica: replica, fixed_hostname: fixed_hostname,
                              username: username, password: password, db: db,
                              reconnect_attempts: reconnect_attempts)
         end
         @connected = true
-        cache_logger.info "Redis connected to #{resolved_redis_address(server: server, servers: servers, cluster: cluster)}"
+        log.info "Redis connected to #{resolved_redis_address(server: server, servers: servers, cluster: cluster)}"
         @client
       rescue StandardError => e
         handle_exception(e, level: :error, handled: false, operation: :redis_client,
@@ -69,40 +82,51 @@ module Legion
       end
 
       def get(key)
-        result = client.with { |conn| conn.get(key) }
-        cache_logger.debug "[cache] GET #{key} hit=#{!result.nil?}"
+        raw = client.with { |conn| conn.get(key) }
+        result = deserialize_value(raw)
+        log.debug { "[cache] GET #{key} hit=#{!result.nil?}" }
         result
-      rescue ::Redis::BaseError => e
-        log_cluster_error('redis_get', e, key: key)
-        raise
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :redis_get, key: key)
+        nil
       end
 
-      def fetch(key, ttl = nil)
+      def fetch(key, ttl: nil)
         result = get(key)
         return result unless result.nil? && block_given?
 
         result = yield
-        set(key, result, ttl)
+        set(key, result, ttl: ttl)
         result
       end
 
-      def set(key, value, ttl = nil)
+      def set(key, value, ttl: nil, **)
+        set_sync(key, value, ttl: ttl, **)
+      end
+
+      def set_sync(key, value, ttl: nil, **)
+        effective_ttl = ttl || default_ttl
         args = {}
-        args[:ex] = ttl unless ttl.nil?
-        result = client.with { |conn| conn.set(key, value, **args) == 'OK' }
-        cache_logger.debug "[cache] SET #{key} ttl=#{ttl.inspect} success=#{result}"
+        args[:ex] = effective_ttl unless effective_ttl.nil?
+        serialized = serialize_value(value)
+        result = client.with { |conn| conn.set(key, serialized, **args) == 'OK' }
+        log.debug { "[cache] SET #{key} ttl=#{effective_ttl.inspect} success=#{result}" }
         result
-      rescue ::Redis::BaseError => e
-        log_cluster_error('redis_set', e, key: key, ttl: ttl)
+      rescue StandardError => e
+        handle_exception(e, level: :error, handled: false, operation: :redis_set_sync, key: key, ttl: effective_ttl)
         raise
       end
 
-      def delete(key)
+      def delete(key, **)
+        delete_sync(key)
+      end
+
+      def delete_sync(key)
         result = client.with { |conn| conn.del(key) == 1 }
-        cache_logger.debug "[cache] DELETE #{key} success=#{result}"
+        log.debug { "[cache] DELETE #{key} success=#{result}" }
         result
-      rescue ::Redis::BaseError => e
-        log_cluster_error('redis_delete', e, key: key)
+      rescue StandardError => e
+        handle_exception(e, level: :error, handled: false, operation: :redis_delete_sync, key: key)
         raise
       end
 
@@ -114,11 +138,11 @@ module Legion
             conn.flushdb == 'OK'
           end
         end
-        cache_logger.debug '[cache] FLUSH completed'
+        log.debug { '[cache] FLUSH completed' }
         result
-      rescue ::Redis::BaseError => e
-        log_cluster_error('redis_flush', e)
-        raise
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :redis_flush)
+        nil
       end
 
       def mget(*keys)
@@ -133,34 +157,64 @@ module Legion
             keys.zip(values).to_h
           end
         end
-        cache_logger.debug "[cache] MGET keys=#{keys.size}"
+        result = result.transform_values { |v| deserialize_value(v) }
+        log.debug { "[cache] MGET keys=#{keys.size}" }
         result
-      rescue ::Redis::BaseError => e
-        log_cluster_error('redis_mget', e, key_count: keys.size)
-        raise
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :redis_mget, key_count: keys.size)
+        {}
       end
 
-      def mset(hash)
+      def mset(hash, ttl: nil, **)
+        mset_sync(hash, ttl: ttl)
+      end
+
+      def mset_sync(hash, ttl: nil, **)
         return true if hash.empty?
 
-        result = client.with do |conn|
-          if cluster_mode?
-            cluster_mset(conn, hash)
-          else
-            conn.mset(*hash.flatten) == 'OK'
-          end
-        end
-        cache_logger.debug "[cache] MSET keys=#{hash.size}"
-        result
-      rescue ::Redis::BaseError => e
-        log_cluster_error('redis_mset', e, key_count: hash.size)
+        hash.each { |key, value| set_sync(key, value, ttl: ttl) }
+        true
+      rescue StandardError => e
+        handle_exception(e, level: :error, handled: false, operation: :redis_mset_sync, key_count: hash.size)
         raise
       end
+
+      SERIALIZE_STRING = "S\x00".b.freeze
+      SERIALIZE_JSON   = "J\x00".b.freeze
 
       private
 
-      def cache_logger
-        @component_logger || log
+      def serialize_value(value)
+        case value
+        when String
+          "#{SERIALIZE_STRING}#{value}"
+        else
+          "#{SERIALIZE_JSON}#{Legion::JSON.dump(value)}"
+        end
+      end
+
+      def deserialize_value(raw)
+        return nil if raw.nil?
+
+        raw = raw.b if raw.respond_to?(:b)
+        if raw.start_with?(SERIALIZE_JSON)
+          Legion::JSON.load(raw.byteslice(2..))
+        elsif raw.start_with?(SERIALIZE_STRING)
+          raw.byteslice(2..)
+        else
+          raw # legacy data, no prefix
+        end
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :redis_deserialize)
+        raw
+      end
+
+      def default_ttl
+        return 3600 unless defined?(Legion::Settings)
+
+        Legion::Settings.dig(:cache, :default_ttl) || 3600
+      rescue StandardError
+        3600
       end
 
       def cluster_mget(conn, keys)
@@ -187,7 +241,7 @@ module Legion
         primaries = node_info.lines.select { |l| l.include?('master') }.map { |l| l.split[1].split('@').first }
         primaries.each do |addr|
           host, port = Legion::Cache::Settings.parse_server_address(addr, default_port: 6379)
-          node = ::Redis.new(host: host, port: port.to_i)
+          node = ::Redis.new(host: host, port: port.to_i, **(@connection_opts || {}))
           node.flushdb
           node.close
         end
@@ -215,8 +269,15 @@ module Legion
         'unknown'
       end
 
-      def log_cluster_error(operation, error, **)
-        handle_exception(error, level: :warn, handled: false, operation: operation, **)
+      def resolve_primary_port(server: nil, servers: [], cluster: nil)
+        nodes = Array(cluster).compact
+        return 6379 if nodes.any?
+
+        resolved = Legion::Cache::Settings.resolve_servers(driver: 'redis', server: server, servers: Array(servers))
+        _, port = Legion::Cache::Settings.parse_server_address(resolved.first, default_port: 6379)
+        port.to_i
+      rescue StandardError
+        6379
       end
 
       def redis_tls_options(port:)
