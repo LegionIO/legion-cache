@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
+require 'legion/cache'
 require 'legion/cache/memory'
 require 'legion/cache/memcached'
 require 'legion/cache/redis'
@@ -86,5 +87,31 @@ RSpec.describe 'exception handling' do
       allow(redis).to receive(:del).and_raise(StandardError, 'timeout')
       expect { cache.delete_sync('k') }.to raise_error(StandardError, 'timeout')
     end
+  end
+end
+
+RSpec.describe 'Legion::Cache top-level exception handling' do
+  before do
+    ENV['LEGION_MODE'] = 'lite'
+    Legion::Cache::Memory.setup
+    Legion::Cache.instance_variable_set(:@using_memory, true)
+    Legion::Cache.instance_variable_set(:@connected, true)
+  end
+
+  after do
+    ENV.delete('LEGION_MODE')
+    Legion::Cache::Memory.reset!
+    Legion::Cache.instance_variable_set(:@using_memory, false)
+    Legion::Cache.instance_variable_set(:@connected, false)
+  end
+
+  it 'get returns nil on internal error' do
+    allow(Legion::Cache::Memory).to receive(:get).and_raise(RuntimeError, 'boom')
+    expect(Legion::Cache.get('key')).to be_nil
+  end
+
+  it 'set with async: false re-raises on error from Memory' do
+    allow(Legion::Cache::Memory).to receive(:set).and_raise(RuntimeError, 'boom')
+    expect { Legion::Cache.set('k', 'v', ttl: 60, async: false) }.to raise_error(RuntimeError, 'boom')
   end
 end
