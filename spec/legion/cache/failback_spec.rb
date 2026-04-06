@@ -62,6 +62,13 @@ RSpec.describe 'failback to local' do
       expect(local_store['key']).to eq('value')
     end
 
+    it 'mget delegates to Local' do
+      local_store['a'] = 1
+      local_store['b'] = 2
+      allow(Legion::Cache::Local).to receive(:mget).with('a', 'b').and_return({ 'a' => 1, 'b' => 2 })
+      expect(Legion::Cache.mget('a', 'b')).to eq({ 'a' => 1, 'b' => 2 })
+    end
+
     it 'fetch delegates to Local' do
       result = Legion::Cache.fetch('miss', ttl: 60) { 'computed' }
       expect(result).to eq('computed')

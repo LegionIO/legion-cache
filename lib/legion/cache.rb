@@ -240,6 +240,7 @@ module Legion
         return {} if keys.empty?
         return keys.to_h { |key| [key, Legion::Cache::Memory.get(key)] } if using_memory?
         return Legion::Cache::Local.mget(*keys) if using_local?
+        return Legion::Cache::Local.mget(*keys) if failback_to_local?
 
         configure_shared_adapter!
         super
@@ -260,6 +261,7 @@ module Legion
         return true if hash.empty?
         return hash.each { |key, value| Legion::Cache::Memory.set_sync(key, value, ttl: ttl) } && true if using_memory?
         return Legion::Cache::Local.mset(hash, ttl: ttl) if using_local?
+        return Legion::Cache::Local.mset(hash, ttl: ttl) if failback_to_local?
 
         configure_shared_adapter!
         super
