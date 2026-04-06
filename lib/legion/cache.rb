@@ -11,6 +11,7 @@ require 'legion/cache/redis_hash'
 require 'legion/cache/memory'
 require 'legion/cache/local'
 require 'legion/cache/async_writer'
+require 'legion/cache/reconnector'
 require 'legion/cache/helper'
 
 module Legion
@@ -86,6 +87,7 @@ module Legion
 
       def shutdown
         log.info 'Shutting down Legion::Cache'
+        stop_reconnector
         async_writer.stop
         if @using_memory
           Legion::Cache::Memory.shutdown
@@ -382,6 +384,7 @@ module Legion
           @connected = false
           Legion::Settings[:cache][:connected] = false
           log.error 'Legion::Cache shared and local adapters are unavailable'
+          start_reconnector
         end
       end
 
@@ -476,7 +479,25 @@ module Legion
       end
 
       def reconnector_attempts
-        0
+        @reconnector&.attempts || 0
+      end
+
+      def start_reconnector
+        return unless enabled?
+
+        stop_reconnector
+        @reconnector = Legion::Cache::Reconnector.new(
+          tier: :shared,
+          connect_block: -> { setup_shared },
+          enabled_block: -> { enabled? }
+        )
+        @reconnector.start
+        log.info 'Legion::Cache started background reconnector for shared tier'
+      end
+
+      def stop_reconnector
+        @reconnector&.stop
+        @reconnector = nil
       end
 
       def uptime_seconds
