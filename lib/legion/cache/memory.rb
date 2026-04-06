@@ -32,47 +32,68 @@ module Legion
           log.debug { "[cache:memory] GET #{key} hit=#{!result.nil?}" }
           result
         end
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :memory_get, key: key)
+        nil
       end
 
-      def set(key, value, ttl = nil)
+      def set(key, value, ttl: nil, **)
+        set_sync(key, value, ttl: ttl)
+      end
+
+      def set_sync(key, value, ttl: nil, **)
+        effective_ttl = ttl || default_ttl
         @mutex.synchronize do
           @store[key] = value
-          if ttl&.positive?
-            @expiry[key] = Time.now + ttl
+          if effective_ttl&.positive?
+            @expiry[key] = Time.now + effective_ttl
           else
             @expiry.delete(key)
           end
-          log.debug { "[cache:memory] SET #{key} ttl=#{ttl.inspect}" }
+          log.debug { "[cache:memory] SET #{key} ttl=#{effective_ttl.inspect}" }
           value
         end
+      rescue StandardError => e
+        handle_exception(e, level: :error, handled: false, operation: :memory_set_sync, key: key)
+        raise
       end
 
-      def fetch(key, ttl = nil)
+      def fetch(key, ttl: nil)
         val = get(key)
         return val unless val.nil?
 
         log.debug { "[cache:memory] FETCH #{key} miss=true" }
         val = yield if block_given?
-        set(key, val, ttl)
+        set(key, val, ttl: ttl)
         val
       end
 
-      def delete(key)
+      def delete(key, **)
+        delete_sync(key)
+      end
+
+      def delete_sync(key)
         @mutex.synchronize do
           removed = @store.delete(key)
           @expiry.delete(key)
           log.debug { "[cache:memory] DELETE #{key} success=#{!removed.nil?}" }
           removed
         end
+      rescue StandardError => e
+        handle_exception(e, level: :error, handled: false, operation: :memory_delete_sync, key: key)
+        raise
       end
 
-      def flush(_delay = 0)
+      def flush
         result = @mutex.synchronize do
           @store.clear
           @expiry.clear
         end
         log.info 'Legion::Cache::Memory flushed'
         result
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :memory_flush)
+        nil
       end
 
       def close = nil
@@ -96,6 +117,10 @@ module Legion
 
       def size = 1
       def available = 1
+
+      def default_ttl
+        3600
+      end
 
       private
 
