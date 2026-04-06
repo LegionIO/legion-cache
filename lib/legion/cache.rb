@@ -19,6 +19,15 @@ module Legion
     class << self
       include Legion::Logging::Helper
 
+      def enabled?
+        return true unless defined?(Legion::Settings)
+
+        Legion::Settings.dig(:cache, :enabled) != false
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_enabled)
+        true
+      end
+
       def connected?
         @connected == true
       end
@@ -103,6 +112,9 @@ module Legion
 
         configure_shared_adapter!
         super
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_get, key: key)
+        nil
       end
 
       def phi_max_ttl
@@ -121,35 +133,50 @@ module Legion
         [ttl, max].min
       end
 
-      def set(key, value, ttl = nil, **opts)
-        ttl = opts.delete(:ttl) || ttl || 180
-        effective_ttl = enforce_phi_ttl(ttl, **opts)
-        return Legion::Cache::Memory.set(key, value, effective_ttl) if @using_memory
-        return Legion::Cache::Local.set(key, value, effective_ttl) if @using_local
+      def set(key, value, ttl: nil, async: true, phi: false)
+        effective_ttl = resolve_ttl(ttl, phi: phi)
+        return Legion::Cache::Memory.set(key, value, ttl: effective_ttl) if @using_memory
+        return Legion::Cache::Local.set(key, value, ttl: effective_ttl) if @using_local
 
         configure_shared_adapter!
-        super(key, value, effective_ttl)
+        set_sync(key, value, ttl: effective_ttl)
       end
 
-      def fetch(key, ttl = nil, &)
-        return Legion::Cache::Memory.fetch(key, ttl, &) if @using_memory
-        return Legion::Cache::Local.fetch(key, ttl, &) if @using_local
+      def set_sync(key, value, ttl: nil, **)
+        return Legion::Cache::Memory.set_sync(key, value, ttl: ttl) if @using_memory
+        return Legion::Cache::Local.set_sync(key, value, ttl: ttl) if @using_local
 
         configure_shared_adapter!
         super
       end
 
-      def delete(key)
+      def fetch(key, ttl: nil, &)
+        return Legion::Cache::Memory.fetch(key, ttl: ttl, &) if @using_memory
+        return Legion::Cache::Local.fetch(key, ttl: ttl, &) if @using_local
+
+        configure_shared_adapter!
+        super
+      end
+
+      def delete(key, async: true)
         return Legion::Cache::Memory.delete(key) if @using_memory
         return Legion::Cache::Local.delete(key) if @using_local
 
         configure_shared_adapter!
+        delete_sync(key)
+      end
+
+      def delete_sync(key)
+        return Legion::Cache::Memory.delete_sync(key) if @using_memory
+        return Legion::Cache::Local.delete_sync(key) if @using_local
+
+        configure_shared_adapter!
         super
       end
 
-      def flush(delay = 0)
-        return Legion::Cache::Memory.flush(delay) if @using_memory
-        return Legion::Cache::Local.flush(delay) if @using_local
+      def flush
+        return Legion::Cache::Memory.flush if @using_memory
+        return Legion::Cache::Local.flush if @using_local
 
         configure_shared_adapter!
         super
@@ -159,16 +186,25 @@ module Legion
         keys = keys.flatten
         return {} if keys.empty?
         return keys.to_h { |key| [key, Legion::Cache::Memory.get(key)] } if @using_memory
-        return local_mget(*keys) if @using_local
+        return Legion::Cache::Local.mget(*keys) if @using_local
 
         configure_shared_adapter!
         super
       end
 
-      def mset(hash)
+      def mset(hash, ttl: nil, async: true)
         return true if hash.empty?
-        return hash.each { |key, value| Legion::Cache::Memory.set(key, value) } && true if @using_memory
-        return local_mset(hash) if @using_local
+        return hash.each { |key, value| Legion::Cache::Memory.set(key, value, ttl: ttl) } && true if @using_memory
+        return Legion::Cache::Local.mset(hash, ttl: ttl) if @using_local
+
+        configure_shared_adapter!
+        mset_sync(hash, ttl: ttl)
+      end
+
+      def mset_sync(hash, ttl: nil, **)
+        return true if hash.empty?
+        return hash.each { |key, value| Legion::Cache::Memory.set_sync(key, value, ttl: ttl) } && true if @using_memory
+        return Legion::Cache::Local.mset(hash, ttl: ttl) if @using_local
 
         configure_shared_adapter!
         super
@@ -244,6 +280,19 @@ module Legion
 
       private
 
+      def resolve_ttl(ttl, phi: false)
+        effective = ttl || default_ttl
+        enforce_phi_ttl(effective, phi: phi)
+      end
+
+      def default_ttl
+        return 3600 unless defined?(Legion::Settings)
+
+        Legion::Settings.dig(:cache, :default_ttl) || 3600
+      rescue StandardError
+        3600
+      end
+
       def setup_local
         return if Legion::Cache::Local.connected?
 
@@ -318,15 +367,6 @@ module Legion
       ensure
         @client = nil
         @connected = false
-      end
-
-      def local_mget(*keys)
-        keys.to_h { |key| [key, Legion::Cache::Local.get(key)] }
-      end
-
-      def local_mset(hash)
-        hash.each { |key, value| Legion::Cache::Local.set(key, value) }
-        true
       end
     end
   end
