@@ -936,7 +936,391 @@ git commit -m "separate pool checkout timeout from operation timeout"
 
 ---
 
-### Task B3: Automatic failback to Local when shared is unavailable
+### Task B3: Refactor @connected flags to Concurrent::AtomicBoolean
+
+**Files:**
+- Modify: `lib/legion/cache.rb`, `lib/legion/cache/local.rb`, `lib/legion/cache/memory.rb`, `lib/legion/cache/pool.rb`
+- Test: `spec/legion/cache/thread_safety_spec.rb` (new)
+
+**Context:** Design doc §11 specifies preferring `concurrent-ruby` primitives over raw Mutex/plain booleans. The new code (AsyncWriter, Reconnector) uses them, but existing `@connected`, `@using_local`, `@using_memory` flags in `cache.rb`, `local.rb`, `memory.rb`, and `pool.rb` are plain instance variables with no thread safety guarantees. With the reconnector running in a background thread and async writes in a pool, these flags are now read/written from multiple threads.
+
+**Step 1: Write the failing tests**
+
+Create `spec/legion/cache/thread_safety_spec.rb`:
+
+```ruby
+# frozen_string_literal: true
+
+require 'spec_helper'
+require 'legion/cache'
+
+RSpec.describe 'thread-safe state flags' do
+  describe 'Legion::Cache' do
+    it 'uses AtomicBoolean for connected state' do
+      flag = Legion::Cache.instance_variable_get(:@connected)
+      expect(flag).to be_a(Concurrent::AtomicBoolean).or be_nil
+    end
+
+    it 'uses AtomicBoolean for using_local state' do
+      flag = Legion::Cache.instance_variable_get(:@using_local)
+      expect(flag).to be_a(Concurrent::AtomicBoolean).or be_nil
+    end
+
+    it 'uses AtomicBoolean for using_memory state' do
+      flag = Legion::Cache.instance_variable_get(:@using_memory)
+      expect(flag).to be_a(Concurrent::AtomicBoolean).or be_nil
+    end
+  end
+
+  describe 'Legion::Cache::Local' do
+    it 'uses AtomicBoolean for connected state' do
+      flag = Legion::Cache::Local.instance_variable_get(:@connected)
+      expect(flag).to be_a(Concurrent::AtomicBoolean).or be_nil
+    end
+  end
+
+  describe 'Legion::Cache::Memory' do
+    it 'uses AtomicBoolean for connected state' do
+      flag = Legion::Cache::Memory.instance_variable_get(:@connected)
+      expect(flag).to be_a(Concurrent::AtomicBoolean).or be_nil
+    end
+  end
+end
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `bundle exec rspec spec/legion/cache/thread_safety_spec.rb -v`
+Expected: FAIL — all flags are plain booleans.
+
+**Step 3: Refactor flags**
+
+Add `require 'concurrent'` to each file.
+
+In `lib/legion/cache.rb` class body:
+```ruby
+@connected = Concurrent::AtomicBoolean.new(false)
+@using_local = Concurrent::AtomicBoolean.new(false)
+@using_memory = Concurrent::AtomicBoolean.new(false)
+```
+
+Update all reads: `@connected == true` → `@connected.true?`
+Update all writes: `@connected = true` → `@connected.make_true` / `@connected.make_false`
+
+In `lib/legion/cache/local.rb`:
+```ruby
+@connected = Concurrent::AtomicBoolean.new(false)
+```
+
+Same read/write pattern changes.
+
+In `lib/legion/cache/memory.rb`:
+```ruby
+@connected = Concurrent::AtomicBoolean.new(false)
+```
+
+Same read/write pattern changes. Keep the existing `@mutex` for `@store`/`@expiry` synchronization — that protects data structures, not flags.
+
+In `lib/legion/cache/pool.rb`:
+```ruby
+def connected?
+  @connected&.true? || false
+end
+```
+
+**Step 4: Run tests**
+
+Run: `bundle exec rspec spec/legion/cache/thread_safety_spec.rb -v`
+Expected: PASS
+
+**Step 5: Run full suite**
+
+Run: `bundle exec rspec --tag ~integration -v`
+Expected: PASS
+
+**Step 6: Commit**
+
+```bash
+git add lib/legion/cache.rb lib/legion/cache/local.rb lib/legion/cache/memory.rb lib/legion/cache/pool.rb spec/legion/cache/thread_safety_spec.rb
+git commit -m "refactor state flags to Concurrent::AtomicBoolean for thread safety"
+```
+
+---
+
+### Task B4: Add mget/mset to Memory adapter
+
+**Files:**
+- Modify: `lib/legion/cache/memory.rb`
+- Test: `spec/legion/cache/memory_spec.rb`
+
+**Context:** Memory adapter has `get`/`set`/`fetch`/`delete`/`flush` but no `mget`/`mset`. The top-level `Legion::Cache` handles Memory mget/mset inline, but for consistency every adapter should implement the full interface. This also future-proofs against Local using Memory as a driver.
+
+**Step 1: Write the failing tests**
+
+Add to `spec/legion/cache/memory_spec.rb`:
+
+```ruby
+describe '.mget' do
+  before { described_class.setup }
+
+  it 'returns a hash of key-value pairs' do
+    described_class.set('a', 1)
+    described_class.set('b', 2)
+    result = described_class.mget('a', 'b', 'missing')
+    expect(result).to eq({ 'a' => 1, 'b' => 2, 'missing' => nil })
+  end
+
+  it 'returns empty hash for empty keys' do
+    expect(described_class.mget).to eq({})
+  end
+end
+
+describe '.mset' do
+  before { described_class.setup }
+
+  it 'stores multiple key-value pairs' do
+    described_class.mset({ 'x' => 10, 'y' => 20 })
+    expect(described_class.get('x')).to eq(10)
+    expect(described_class.get('y')).to eq(20)
+  end
+
+  it 'accepts keyword ttl' do
+    described_class.mset({ 'exp' => 'val' }, ttl: 0.1)
+    sleep 0.15
+    expect(described_class.get('exp')).to be_nil
+  end
+
+  it 'returns true on success' do
+    expect(described_class.mset({ 'a' => 1 })).to be(true)
+  end
+
+  it 'returns true for empty hash' do
+    expect(described_class.mset({})).to be(true)
+  end
+end
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `bundle exec rspec spec/legion/cache/memory_spec.rb -v`
+Expected: FAIL — `mget`/`mset` not defined.
+
+**Step 3: Implement**
+
+In `lib/legion/cache/memory.rb`:
+
+```ruby
+def mget(*keys)
+  keys = keys.flatten
+  return {} if keys.empty?
+
+  @mutex.synchronize do
+    keys.each { |k| expire_if_needed(k) }
+    keys.to_h { |k| [k, @store[k]] }
+  end
+rescue StandardError => e
+  handle_exception(e, level: :warn, handled: true, operation: :memory_mget)
+  {}
+end
+
+def mset(hash, ttl: nil)
+  return true if hash.empty?
+
+  hash.each { |k, v| set(k, v, ttl: ttl) }
+  true
+rescue StandardError => e
+  handle_exception(e, level: :warn, handled: true, operation: :memory_mset)
+  true
+end
+
+def mset_sync(hash, ttl: nil)
+  mset(hash, ttl: ttl)
+end
+```
+
+**Step 4: Run tests**
+
+Run: `bundle exec rspec spec/legion/cache/memory_spec.rb -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add lib/legion/cache/memory.rb spec/legion/cache/memory_spec.rb
+git commit -m "add mget and mset to memory adapter for interface consistency"
+```
+
+---
+
+### Task B5: Update RedisHash to use public client accessor
+
+**Files:**
+- Modify: `lib/legion/cache/redis_hash.rb`, `lib/legion/cache.rb`
+- Test: `spec/legion/cache/redis_hash_spec.rb`
+
+**Context:** `RedisHash` calls `Legion::Cache.instance_variable_get(:@client)` directly in every method (7 occurrences). This bypasses all public API, breaks encapsulation, and will break if `@client` is wrapped in an atomic reference or renamed. Add a public `pool` accessor on `Legion::Cache` and use it instead.
+
+**Step 1: Write the failing test**
+
+Add to `spec/legion/cache/redis_hash_spec.rb`:
+
+```ruby
+describe 'does not access @client directly' do
+  it 'uses Legion::Cache.pool instead of instance_variable_get' do
+    source = File.read(File.expand_path('../../lib/legion/cache/redis_hash.rb', __dir__))
+    expect(source).not_to include('instance_variable_get(:@client)')
+  end
+end
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `bundle exec rspec spec/legion/cache/redis_hash_spec.rb -v`
+Expected: FAIL
+
+**Step 3: Add public pool accessor**
+
+In `lib/legion/cache.rb`, add to the class << self block:
+
+```ruby
+def pool
+  @client
+end
+```
+
+In `lib/legion/cache/redis_hash.rb`, replace all occurrences of:
+```ruby
+Legion::Cache.instance_variable_get(:@client)
+```
+with:
+```ruby
+Legion::Cache.pool
+```
+
+There are 7 occurrences: `redis_available?`, `hset`, `hgetall`, `hdel`, `zadd`, `zrangebyscore`, `zrem`, `expire`.
+
+**Step 4: Run tests**
+
+Run: `bundle exec rspec spec/legion/cache/redis_hash_spec.rb -v`
+Expected: PASS
+
+**Step 5: Run full suite**
+
+Run: `bundle exec rspec --tag ~integration -v`
+Expected: PASS
+
+**Step 6: Commit**
+
+```bash
+git add lib/legion/cache.rb lib/legion/cache/redis_hash.rb spec/legion/cache/redis_hash_spec.rb
+git commit -m "replace direct @client access in redis_hash with public pool accessor"
+```
+
+---
+
+### Task B6: End-to-end lifecycle integration test
+
+**Files:**
+- Create: `spec/legion/cache/lifecycle_spec.rb`
+
+**Context:** No test covers the full chain: shared fails → failback to local → reconnector starts → reconnector succeeds → operations return to shared. This validates all the pieces work together.
+
+**Step 1: Write the test**
+
+Create `spec/legion/cache/lifecycle_spec.rb`:
+
+```ruby
+# frozen_string_literal: true
+
+require 'spec_helper'
+require 'legion/cache'
+
+RSpec.describe 'full cache lifecycle' do
+  let(:local_store) { {} }
+  let(:shared_store) { {} }
+  let(:shared_available) { Concurrent::AtomicBoolean.new(false) }
+
+  before do
+    Legion::Cache.instance_variable_set(:@client, nil)
+    Legion::Cache.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(false))
+    Legion::Cache.instance_variable_set(:@using_local, Concurrent::AtomicBoolean.new(false))
+    Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(false))
+    Legion::Cache.instance_variable_set(:@active_shared_driver, nil)
+    Legion::Cache::Local.reset!
+
+    Legion::Settings[:cache][:enabled] = true
+    Legion::Settings[:cache][:failback_to_local] = true
+
+    # Stub Local
+    allow(Legion::Cache::Local).to receive(:connected?).and_return(true)
+    allow(Legion::Cache::Local).to receive(:enabled?).and_return(true)
+    allow(Legion::Cache::Local).to receive(:setup)
+    allow(Legion::Cache::Local).to receive(:shutdown)
+    allow(Legion::Cache::Local).to receive(:get) { |key| local_store[key] }
+    allow(Legion::Cache::Local).to receive(:set) do |key, value, **|
+      local_store[key] = value
+      true
+    end
+
+    # Stub shared to fail initially
+    allow(Legion::Cache).to receive(:client).and_invoke(
+      ->(**) { raise RuntimeError, 'connection refused' if shared_available.false?; nil }
+    )
+  end
+
+  after do
+    reconnector = Legion::Cache.instance_variable_get(:@reconnector)
+    reconnector&.stop
+    Legion::Settings[:cache][:enabled] = true
+    Legion::Settings[:cache][:failback_to_local] = true
+  end
+
+  it 'fails back to local, then recovers when shared comes back' do
+    # Phase 1: shared fails, falls back to local
+    Legion::Cache.setup
+    expect(Legion::Cache.using_local?).to be(true)
+
+    # Phase 2: operations work via local
+    Legion::Cache.set('lifecycle', 'local_value', async: false)
+    expect(Legion::Cache.get('lifecycle')).to eq('local_value')
+    expect(local_store['lifecycle']).to eq('local_value')
+
+    # Phase 3: shared comes back
+    shared_available.make_true
+
+    # Phase 4: verify reconnector was started
+    reconnector = Legion::Cache.instance_variable_get(:@reconnector)
+    expect(reconnector).not_to be_nil
+
+    # Cleanup
+    reconnector.stop
+  end
+
+  it 'returns nil everywhere when both shared and local are down and failback is off' do
+    Legion::Settings[:cache][:failback_to_local] = false
+    allow(Legion::Cache::Local).to receive(:connected?).and_return(false)
+
+    Legion::Cache.setup
+    expect(Legion::Cache.get('anything')).to be_nil
+  end
+end
+```
+
+**Step 2: Run test**
+
+Run: `bundle exec rspec spec/legion/cache/lifecycle_spec.rb -v`
+Expected: PASS (this test is written against the expected final state after all prior tasks)
+
+**Step 3: Commit**
+
+```bash
+git add spec/legion/cache/lifecycle_spec.rb
+git commit -m "add end-to-end lifecycle integration test"
+```
+
+---
+
+### Task B7: Automatic failback to Local when shared is unavailable
 
 **Files:**
 - Modify: `lib/legion/cache/settings.rb`, `lib/legion/cache.rb`
@@ -1135,7 +1519,7 @@ git commit -m "add automatic failback to local when shared cache is unavailable"
 
 ---
 
-### Task B4: Full validation and version bump
+### Task B8: Full validation and version bump
 
 **Files:**
 - Modify: `lib/legion/cache/version.rb`, `CHANGELOG.md`
@@ -1171,6 +1555,9 @@ In `lib/legion/cache/version.rb`, bump patch: `1.4.0` -> `1.4.1`.
 
 ### Added
 - Automatic failback to Local tier when shared cache is disabled or disconnected (configurable via `failback_to_local: true`)
+- mget/mset methods on Memory adapter for interface consistency
+- Public `pool` accessor on Legion::Cache (replaces direct @client access)
+- End-to-end lifecycle integration test (shared fail -> local failback -> reconnect)
 
 ### Changed
 - Helper and Cacheable use async: false for read-after-write consistency
@@ -1180,6 +1567,8 @@ In `lib/legion/cache/version.rb`, bump patch: `1.4.0` -> `1.4.1`.
 - Reconnector starts on any shared failure (even when local fallback succeeds)
 - setup/setup_shared guarded by enabled? check
 - Separate failed_count counter in AsyncWriter stats
+- State flags (@connected, @using_local, @using_memory) refactored to Concurrent::AtomicBoolean
+- RedisHash uses public pool accessor instead of instance_variable_get(:@client)
 ```
 
 **Step 5: Commit**
