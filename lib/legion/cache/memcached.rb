@@ -12,7 +12,7 @@ module Legion
       extend self
       extend Legion::Logging::Helper
 
-      def client(server: nil, servers: nil, pool_size: nil, timeout: nil,
+      def client(server: nil, servers: nil, pool_size: nil, timeout: nil, # rubocop:disable Metrics/CyclomaticComplexity,Metrics/PerceivedComplexity,Metrics/ParameterLists
                  username: nil, password: nil, logger: nil, **opts)
         return @client unless @client.nil?
 
