@@ -36,19 +36,19 @@ RSpec.describe Legion::Cache::Helper do
   subject { helper_class.new }
 
   describe 'FALLBACK_TTL' do
-    it 'is 60' do
-      expect(Legion::Cache::Helper::FALLBACK_TTL).to eq(60)
+    it 'is 3600' do
+      expect(Legion::Cache::Helper::FALLBACK_TTL).to eq(3600)
     end
   end
 
   describe '#cache_default_ttl' do
     it 'returns the settings value' do
-      expect(subject.cache_default_ttl).to eq(60)
+      expect(subject.cache_default_ttl).to eq(3600)
     end
 
     it 'falls back to FALLBACK_TTL when settings key is nil' do
       allow(Legion::Settings).to receive(:dig).with(:cache, :default_ttl).and_return(nil)
-      expect(subject.cache_default_ttl).to eq(60)
+      expect(subject.cache_default_ttl).to eq(3600)
     end
 
     it 'can be overridden by a LEX' do
@@ -60,7 +60,7 @@ RSpec.describe Legion::Cache::Helper do
       allow(Legion::Settings).to receive(:dig).with(:cache, :default_ttl).and_raise(StandardError, 'boom')
       allow(subject).to receive(:handle_exception)
 
-      expect(subject.cache_default_ttl).to eq(60)
+      expect(subject.cache_default_ttl).to eq(3600)
       expect(subject).to have_received(:handle_exception).with(
         an_instance_of(StandardError),
         level:     :warn,
@@ -72,7 +72,7 @@ RSpec.describe Legion::Cache::Helper do
 
   describe '#local_cache_default_ttl' do
     it 'returns the local settings value' do
-      expect(subject.local_cache_default_ttl).to eq(60)
+      expect(subject.local_cache_default_ttl).to eq(21_600)
     end
 
     it 'falls back to cache_default_ttl when local key is nil' do
@@ -109,23 +109,23 @@ RSpec.describe Legion::Cache::Helper do
 
   describe '#cache_set' do
     it 'delegates to Legion::Cache with namespaced key and explicit TTL' do
-      expect(Legion::Cache).to receive(:set).with('microsoft_teams:messages', 'data', 120, phi: false)
+      expect(Legion::Cache).to receive(:set).with('microsoft_teams:messages', 'data', ttl: 120, async: true, phi: false)
       subject.cache_set(':messages', 'data', ttl: 120)
     end
 
     it 'uses cache_default_ttl when ttl is not provided' do
-      expect(Legion::Cache).to receive(:set).with('microsoft_teams:messages', 'data', 60, phi: false)
+      expect(Legion::Cache).to receive(:set).with('microsoft_teams:messages', 'data', ttl: 3600, async: true, phi: false)
       subject.cache_set(':messages', 'data')
     end
 
     it 'uses LEX override TTL when defined' do
       obj = custom_ttl_class.new
-      expect(Legion::Cache).to receive(:set).with('custom_lex:key', 'val', 600, phi: false)
+      expect(Legion::Cache).to receive(:set).with('custom_lex:key', 'val', ttl: 600, async: true, phi: false)
       obj.cache_set(':key', 'val')
     end
 
     it 'forwards phi: true to Legion::Cache.set' do
-      expect(Legion::Cache).to receive(:set).with('microsoft_teams:phi_data', 'secret', 7200, phi: true)
+      expect(Legion::Cache).to receive(:set).with('microsoft_teams:phi_data', 'secret', ttl: 7200, async: true, phi: true)
       subject.cache_set(':phi_data', 'secret', ttl: 7200, phi: true)
     end
   end
@@ -139,19 +139,19 @@ RSpec.describe Legion::Cache::Helper do
 
   describe '#cache_delete' do
     it 'delegates to Legion::Cache with namespaced key' do
-      expect(Legion::Cache).to receive(:delete).with('microsoft_teams:messages')
+      expect(Legion::Cache).to receive(:delete).with('microsoft_teams:messages', async: true)
       subject.cache_delete(':messages')
     end
   end
 
   describe '#cache_fetch' do
     it 'delegates to Legion::Cache with namespaced key and explicit TTL' do
-      expect(Legion::Cache).to receive(:fetch).with('microsoft_teams:key', 120)
+      expect(Legion::Cache).to receive(:fetch).with('microsoft_teams:key', ttl: 120)
       subject.cache_fetch(':key', ttl: 120)
     end
 
     it 'uses cache_default_ttl when ttl is not provided' do
-      expect(Legion::Cache).to receive(:fetch).with('microsoft_teams:key', 60)
+      expect(Legion::Cache).to receive(:fetch).with('microsoft_teams:key', ttl: 3600)
       subject.cache_fetch(':key')
     end
   end
@@ -170,20 +170,20 @@ RSpec.describe Legion::Cache::Helper do
 
   describe '#local_cache_set' do
     it 'delegates to Legion::Cache::Local with namespaced key' do
-      allow(Legion::Cache).to receive(:enforce_phi_ttl).with(60, phi: false).and_return(60)
-      expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:hwm', 'ts', 60)
+      allow(Legion::Cache).to receive(:enforce_phi_ttl).with(21_600, phi: false).and_return(21_600)
+      expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:hwm', 'ts', ttl: 21_600)
       subject.local_cache_set(':hwm', 'ts')
     end
 
     it 'uses explicit TTL when provided' do
       allow(Legion::Cache).to receive(:enforce_phi_ttl).with(300, phi: false).and_return(300)
-      expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:hwm', 'ts', 300)
+      expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:hwm', 'ts', ttl: 300)
       subject.local_cache_set(':hwm', 'ts', ttl: 300)
     end
 
     it 'enforces PHI TTL cap' do
       allow(Legion::Cache).to receive(:enforce_phi_ttl).with(7200, phi: true).and_return(3600)
-      expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:phi', 'data', 3600)
+      expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:phi', 'data', ttl: 3600)
       subject.local_cache_set(':phi', 'data', ttl: 7200, phi: true)
     end
   end
@@ -204,12 +204,12 @@ RSpec.describe Legion::Cache::Helper do
 
   describe '#local_cache_fetch' do
     it 'uses local_cache_default_ttl when ttl is not provided' do
-      expect(Legion::Cache::Local).to receive(:fetch).with('microsoft_teams:key', 60)
+      expect(Legion::Cache::Local).to receive(:fetch).with('microsoft_teams:key', ttl: 21_600)
       subject.local_cache_fetch(':key')
     end
 
     it 'uses explicit TTL when provided' do
-      expect(Legion::Cache::Local).to receive(:fetch).with('microsoft_teams:key', 300)
+      expect(Legion::Cache::Local).to receive(:fetch).with('microsoft_teams:key', ttl: 300)
       subject.local_cache_fetch(':key', ttl: 300)
     end
   end
@@ -340,13 +340,13 @@ RSpec.describe Legion::Cache::Helper do
       before { allow(subject).to receive(:cache_redis?).and_return(true) }
 
       it 'preserves TTL semantics via sequential set calls' do
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:a', 'v1', 60)
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:b', 'v2', 60)
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:a', 'v1', ttl: 3600, async: true)
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:b', 'v2', ttl: 3600, async: true)
         subject.cache_mset({ ':a' => 'v1', ':b' => 'v2' })
       end
 
       it 'uses explicit TTL when provided' do
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:k', 'val', 300)
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:k', 'val', ttl: 300, async: true)
         subject.cache_mset({ ':k' => 'val' }, ttl: 300)
       end
 
@@ -365,13 +365,13 @@ RSpec.describe Legion::Cache::Helper do
       before { allow(subject).to receive(:cache_redis?).and_return(false) }
 
       it 'falls back to sequential sets using default TTL' do
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:a', 'v1', 60)
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:b', 'v2', 60)
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:a', 'v1', ttl: 3600, async: true)
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:b', 'v2', ttl: 3600, async: true)
         subject.cache_mset({ ':a' => 'v1', ':b' => 'v2' })
       end
 
       it 'uses explicit TTL when provided' do
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:k', 'val', 300)
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:k', 'val', ttl: 300, async: true)
         subject.cache_mset({ ':k' => 'val' }, ttl: 300)
       end
 
@@ -413,7 +413,7 @@ RSpec.describe Legion::Cache::Helper do
       before { allow(subject).to receive(:local_cache_redis?).and_return(true) }
 
       it 'preserves TTL semantics via sequential local set calls' do
-        expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:k', 'v', 60)
+        expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:k', 'v', ttl: 21_600)
         subject.local_cache_mset({ ':k' => 'v' })
       end
     end
@@ -422,12 +422,12 @@ RSpec.describe Legion::Cache::Helper do
       before { allow(subject).to receive(:local_cache_redis?).and_return(false) }
 
       it 'falls back to sequential local sets' do
-        expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:k', 'v', 60)
+        expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:k', 'v', ttl: 21_600)
         subject.local_cache_mset({ ':k' => 'v' })
       end
 
       it 'uses explicit TTL when provided' do
-        expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:k', 'v', 120)
+        expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:k', 'v', ttl: 120)
         subject.local_cache_mset({ ':k' => 'v' }, ttl: 120)
       end
     end
@@ -459,13 +459,13 @@ RSpec.describe Legion::Cache::Helper do
 
       it 'serializes hash as JSON via cache set (merge)' do
         allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return(nil)
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:h', '{"f":"v"}', 60)
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:h', '{"f":"v"}', ttl: 3600, async: false)
         subject.cache_hset(':h', { 'f' => 'v' })
       end
 
       it 'merges new fields into existing JSON hash' do
         allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return('{"existing":"val"}')
-        expect(Legion::Cache).to receive(:set) do |_key, json, _ttl|
+        expect(Legion::Cache).to receive(:set) do |_key, json, **_opts|
           parsed = Legion::JSON.load(json)
           expect(parsed).to include(existing: 'val', f: 'v')
         end
@@ -525,7 +525,7 @@ RSpec.describe Legion::Cache::Helper do
 
       it 'removes specified fields from JSON hash and returns count' do
         allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return('{"a":"1","b":"2"}')
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:h', anything, 60) do |_k, json, _ttl|
+        expect(Legion::Cache).to receive(:set).with('microsoft_teams:h', anything, ttl: 3600, async: false) do |_k, json, **_opts|
           parsed = Legion::JSON.load(json)
           expect(parsed.keys.map(&:to_s)).not_to include('a')
         end
