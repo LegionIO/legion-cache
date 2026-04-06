@@ -37,6 +37,15 @@ module Legion
           @connected = false
         end
 
+        def enabled?
+          return true unless defined?(Legion::Settings)
+
+          Legion::Settings.dig(:cache_local, :enabled) != false
+        rescue StandardError => e
+          handle_exception(e, level: :warn, handled: true, operation: :cache_local_enabled)
+          true
+        end
+
         def connected?
           @connected == true
         end
@@ -47,47 +56,70 @@ module Legion
 
         def get(key)
           result = @driver.get(key)
-          log.debug "[cache:local] GET #{key} hit=#{!result.nil?}"
+          log.debug { "[cache:local] GET #{key} hit=#{!result.nil?}" }
           result
         rescue StandardError => e
-          handle_exception(e, level: :warn, handled: false, operation: :cache_local_get, key: key)
+          handle_exception(e, level: :warn, handled: true, operation: :cache_local_get, key: key)
+          nil
+        end
+
+        def set(key, value, ttl: nil, **opts)
+          set_sync(key, value, ttl: ttl, **opts)
+        end
+
+        def set_sync(key, value, ttl: nil, **)
+          effective_ttl = ttl || local_default_ttl
+          result = @driver.set_sync(key, value, ttl: effective_ttl)
+          log.debug { "[cache:local] SET #{key} ttl=#{effective_ttl} success=#{result}" }
+          result
+        rescue StandardError => e
+          handle_exception(e, level: :error, handled: false, operation: :cache_local_set_sync, key: key, ttl: effective_ttl)
           raise
         end
 
-        def set(key, value, ttl = 180)
-          result = @driver.set(key, value, ttl)
-          log.debug "[cache:local] SET #{key} ttl=#{ttl} success=#{result}"
+        def fetch(key, ttl: nil, &)
+          result = @driver.fetch(key, ttl: ttl, &)
+          log.debug { "[cache:local] FETCH #{key} hit=#{!result.nil?}" }
           result
         rescue StandardError => e
-          handle_exception(e, level: :warn, handled: false, operation: :cache_local_set, key: key, ttl: ttl)
+          handle_exception(e, level: :warn, handled: true, operation: :cache_local_fetch, key: key, ttl: ttl)
+          nil
+        end
+
+        def delete(key, **)
+          delete_sync(key)
+        end
+
+        def delete_sync(key)
+          result = @driver.delete_sync(key)
+          log.debug { "[cache:local] DELETE #{key} success=#{result}" }
+          result
+        rescue StandardError => e
+          handle_exception(e, level: :error, handled: false, operation: :cache_local_delete_sync, key: key)
           raise
         end
 
-        def fetch(key, ttl = nil, &)
-          result = @driver.fetch(key, ttl, &)
-          log.debug "[cache:local] FETCH #{key} hit=#{!result.nil?}"
+        def flush
+          result = @driver.flush
+          log.debug { '[cache:local] FLUSH completed' }
           result
         rescue StandardError => e
-          handle_exception(e, level: :warn, handled: false, operation: :cache_local_fetch, key: key, ttl: ttl)
-          raise
+          handle_exception(e, level: :warn, handled: true, operation: :cache_local_flush)
+          nil
         end
 
-        def delete(key)
-          result = @driver.delete(key)
-          log.debug "[cache:local] DELETE #{key} success=#{result}"
-          result
-        rescue StandardError => e
-          handle_exception(e, level: :warn, handled: false, operation: :cache_local_delete, key: key)
-          raise
+        def mget(*keys)
+          keys = keys.flatten
+          return {} if keys.empty?
+
+          keys.to_h { |key| [key, get(key)] }
         end
 
-        def flush(delay = 0)
-          result = @driver.flush(delay)
-          log.debug '[cache:local] FLUSH completed'
-          result
-        rescue StandardError => e
-          handle_exception(e, level: :warn, handled: false, operation: :cache_local_flush, delay: delay)
-          raise
+        def mset(hash, ttl: nil, **)
+          return true if hash.empty?
+
+          hash.each { |key, value| set(key, value, ttl: ttl) }
+          true
         end
 
         def client
@@ -136,6 +168,14 @@ module Legion
         end
 
         private
+
+        def local_default_ttl
+          return 21_600 unless defined?(Legion::Settings)
+
+          Legion::Settings.dig(:cache_local, :default_ttl) || 21_600
+        rescue StandardError
+          21_600
+        end
 
         def build_driver(driver_name)
           case Legion::Cache::Settings.normalize_driver(driver_name)
