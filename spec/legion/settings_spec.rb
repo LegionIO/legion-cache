@@ -65,6 +65,16 @@ RSpec.describe Legion::Cache::Settings do
     end
   end
 
+  describe 'default TTL values' do
+    it 'has global default_ttl of 3600' do
+      expect(Legion::Cache::Settings.default[:default_ttl]).to eq(3600)
+    end
+
+    it 'has local default_ttl of 21600' do
+      expect(Legion::Cache::Settings.local[:default_ttl]).to eq(21_600)
+    end
+  end
+
   describe '.local' do
     subject(:locals) { described_class.local }
 
