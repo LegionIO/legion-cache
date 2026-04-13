@@ -84,4 +84,14 @@ RSpec.describe 'Legion::Cache interface' do
   it 'responds to enabled?' do
     expect(Legion::Cache).to respond_to(:enabled?)
   end
+
+  it 'has set_nx method' do
+    expect(Legion::Cache.method(:set_nx)).to be_a(Method)
+  end
+
+  it 'set_nx accepts keyword ttl' do
+    params = Legion::Cache.method(:set_nx).parameters
+    names = params.map(&:last)
+    expect(names).to include(:ttl)
+  end
 end
