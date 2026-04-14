@@ -459,7 +459,11 @@ RSpec.describe Legion::Cache::Helper do
 
       it 'serializes hash as JSON via cache set (merge)' do
         allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return(nil)
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:h', '{"f":"v"}', ttl: 3600, async: false)
+        expect(Legion::Cache).to receive(:set) do |key, json, **opts|
+          expect(key).to eq('microsoft_teams:h')
+          expect(opts).to eq(ttl: 3600, async: false)
+          expect(Legion::JSON.load(json)).to eq(f: 'v')
+        end
         subject.cache_hset(':h', { 'f' => 'v' })
       end
 

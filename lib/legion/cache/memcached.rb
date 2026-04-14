@@ -76,6 +76,16 @@ module Legion
         nil
       end
 
+      def set_nx(key, value, ttl: nil)
+        effective_ttl = ttl || default_ttl
+        result = client.with { |conn| conn.add(key, value, effective_ttl) == true }
+        log.debug { "[cache] SET_NX #{key} ttl=#{effective_ttl.inspect} result=#{result}" }
+        result
+      rescue StandardError => e
+        handle_exception(e, level: :error, handled: false, operation: :memcached_set_nx, key: key, ttl: effective_ttl)
+        raise
+      end
+
       def set(key, value, ttl: nil, **)
         set_sync(key, value, ttl: ttl, **)
       end

@@ -100,6 +100,17 @@ module Legion
         result
       end
 
+      def set_nx(key, value, ttl: nil)
+        effective_ttl = ttl || default_ttl
+        serialized = serialize_value(value)
+        result = client.with { |conn| conn.set(key, serialized, nx: true, ex: effective_ttl) == 'OK' }
+        log.debug { "[cache] SET_NX #{key} ttl=#{effective_ttl.inspect} result=#{result}" }
+        result
+      rescue StandardError => e
+        handle_exception(e, level: :error, handled: false, operation: :redis_set_nx, key: key, ttl: effective_ttl)
+        raise
+      end
+
       def set(key, value, ttl: nil, **)
         set_sync(key, value, ttl: ttl, **)
       end

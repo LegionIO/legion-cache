@@ -190,6 +190,19 @@ module Legion
         end
       end
 
+      def set_nx(key, value, ttl: nil)
+        effective_ttl = resolve_ttl(ttl)
+        return Legion::Cache::Memory.set_nx(key, value, ttl: effective_ttl) if using_memory?
+        return Legion::Cache::Local.set_nx(key, value, ttl: effective_ttl) if using_local?
+        return Legion::Cache::Local.set_nx(key, value, ttl: effective_ttl) if failback_to_local?
+
+        configure_shared_adapter!
+        super
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :cache_set_nx, key: key)
+        false
+      end
+
       def set_sync(key, value, ttl: nil, **)
         return Legion::Cache::Memory.set_sync(key, value, ttl: ttl) if using_memory?
         return Legion::Cache::Local.set_sync(key, value, ttl: ttl) if using_local?

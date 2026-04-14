@@ -55,6 +55,25 @@ module Legion
         set_sync(key, value, ttl: ttl, phi: phi)
       end
 
+      def set_nx(key, value, ttl: nil)
+        @mutex.synchronize do
+          expire_if_needed(key)
+          return false if @store.key?(key)
+
+          @store[key] = value
+          if ttl&.positive?
+            @expiry[key] = Time.now + ttl
+          else
+            @expiry.delete(key)
+          end
+          log.debug { "[cache:memory] SET_NX #{key} ttl=#{ttl.inspect} result=true" }
+          true
+        end
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :memory_set_nx)
+        false
+      end
+
       def set_sync(key, value, ttl: nil, phi: false)
         ttl = enforce_phi_ttl(ttl, phi: phi) if phi
         @mutex.synchronize do
