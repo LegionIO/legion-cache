@@ -113,33 +113,47 @@ RSpec.describe Legion::Cache::Helper do
     let(:now) { 1000.0 }
 
     before do
-      Legion::Cache::Local.reset!
+      @mode = ENV.fetch('LEGION_MODE', nil)
+      ENV['LEGION_MODE'] = 'lite'
+      Legion::Cache.shutdown
       memory.reset!
       allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now)
-      allow(Legion::Cache).to receive(:using_memory?).and_return(true)
+      Legion::Cache.setup
       allow(Legion::Cache::Local).to receive(:build_driver).and_return(memory)
       allow(Legion::Cache::Local).to receive(:local_settings).and_return(Legion::Cache::Settings.local)
       Legion::Cache::Local.setup
     end
 
     after do
-      Legion::Cache::Local.shutdown
+      Legion::Cache.shutdown
       memory.reset!
+      @mode ? ENV['LEGION_MODE'] = @mode : ENV.delete('LEGION_MODE')
+    end
+
+    def drain_mutations
+      [Legion::Cache, Legion::Cache::Local].each do |tier|
+        writer = tier.instance_variable_get(:@async_writer)
+        writer.stop
+        writer.start
+      end
     end
 
     %i[cache local_cache].each do |prefix|
       context "with #{prefix} helpers" do
-        it 'makes explicit synchronous writes and deletes immediately visible' do
-          subject.public_send(:"#{prefix}_set", ':key', 'value', async: false)
+        it 'stores and deletes namespaced entries' do
+          subject.public_send(:"#{prefix}_set", ':key', 'value')
+          drain_mutations
           expect(subject.public_send(:"#{prefix}_get", ':key')).to eq('value')
 
-          subject.public_send(:"#{prefix}_delete", ':key', async: false)
+          subject.public_send(:"#{prefix}_delete", ':key')
+          drain_mutations
           expect(subject.public_send(:"#{prefix}_get", ':key')).to be_nil
         end
 
         it 'expires explicit TTLs before the default TTL' do
-          subject.public_send(:"#{prefix}_set", ':short', 'short', ttl: 10, async: false)
-          subject.public_send(:"#{prefix}_set", ':default', 'default', async: false)
+          subject.public_send(:"#{prefix}_set", ':short', 'short', ttl: 10)
+          subject.public_send(:"#{prefix}_set", ':default', 'default')
+          drain_mutations
           allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 11)
 
           expect(subject.public_send(:"#{prefix}_get", ':short')).to be_nil
@@ -147,17 +161,19 @@ RSpec.describe Legion::Cache::Helper do
         end
 
         it 'expires PHI at the policy cap without shortening ordinary entries' do
-          subject.public_send(:"#{prefix}_set", ':phi', 'sensitive', ttl: 7200, phi: true, async: false)
-          subject.public_send(:"#{prefix}_set", ':ordinary', 'ordinary', ttl: 7200, async: false)
+          subject.public_send(:"#{prefix}_set", ':phi', 'sensitive', ttl: 7200, phi: true)
+          subject.public_send(:"#{prefix}_set", ':ordinary', 'ordinary', ttl: 7200)
+          drain_mutations
           allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 3601)
 
           expect(subject.public_send(:"#{prefix}_get", ':phi')).to be_nil
           expect(subject.public_send(:"#{prefix}_get", ':ordinary')).to eq('ordinary')
         end
 
-        it 'makes the entire synchronous batch visible with its requested expiry' do
+        it 'stores the entire batch with its requested expiry' do
           values = { ':a' => 'first', ':b' => 'second' }
-          subject.public_send(:"#{prefix}_mset", values, ttl: 10, async: false)
+          subject.public_send(:"#{prefix}_mset", values, ttl: 10)
+          drain_mutations
           expect(subject.public_send(:"#{prefix}_mget", *values.keys)).to eq(values)
 
           allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 11)
@@ -168,7 +184,8 @@ RSpec.describe Legion::Cache::Helper do
 
     it 'uses the extension TTL override for shared-cache entries' do
       obj = custom_ttl_class.new
-      obj.cache_set(':key', 'value', async: false)
+      obj.cache_set(':key', 'value')
+      drain_mutations
       allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 599)
       expect(obj.cache_get(':key')).to eq('value')
 
