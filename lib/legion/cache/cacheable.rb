@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'digest'
+require 'securerandom'
 require 'legion/logging/helper'
 
 module Legion
@@ -12,6 +13,7 @@ module Legion
 
       def self.extended(base)
         base.instance_variable_set(:@cached_methods, {})
+        base.instance_variable_set(:@cache_identity, "Anonymous:#{SecureRandom.uuid}")
       end
 
       def cached_methods
@@ -19,10 +21,10 @@ module Legion
       end
 
       def cache_method(method_name, ttl:, scope: :local, exclude_from_key: [])
-        exclude_from_key |= %i[token bypass_local_method_cache]
+        exclude_from_key = (exclude_from_key - [:token, 'token']) | [:bypass_local_method_cache]
         cached_methods[method_name] = { ttl: ttl, scope: scope, exclude_from_key: exclude_from_key }
 
-        mod_name = name || 'Anonymous'
+        mod_name = name || @cache_identity
         config = cached_methods[method_name]
 
         wrapper = Module.new do
@@ -51,8 +53,8 @@ module Legion
       end
 
       def self.build_cache_key(mod_name, method_name, exclude:, **kwargs)
-        filtered = kwargs.except(*exclude)
-        args_hash = Digest::MD5.hexdigest(filtered.sort.to_s)
+        filtered = kwargs.except(*(exclude - [:token, 'token']))
+        args_hash = Digest::SHA256.hexdigest(filtered.sort.to_s)
         "#{mod_name}.#{method_name}.#{args_hash}"
       end
 

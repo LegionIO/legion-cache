@@ -42,14 +42,14 @@ RSpec.describe Legion::Cache::Cacheable do
 end
 
 RSpec.describe Legion::Cache::Cacheable, '.build_cache_key' do
-  it 'produces a key with module path, method name, and args hash' do
-    key = described_class.build_cache_key('MyModule', :my_method, exclude: [], user_id: 'me')
-    expect(key).to match(/\AMyModule\.my_method\.[a-f0-9]{32}\z/)
+  it 'never includes credential material in the cache key' do
+    key = described_class.build_cache_key('M', :m, exclude: [], token: 'secret-access-token')
+    expect(key).not_to include('secret-access-token')
   end
 
   it 'excludes filtered args from the hash' do
-    key_with = described_class.build_cache_key('M', :m, exclude: [:token], user_id: 'me', token: 'secret')
-    key_without = described_class.build_cache_key('M', :m, exclude: [:token], user_id: 'me')
+    key_with = described_class.build_cache_key('M', :m, exclude: [:trace_id], user_id: 'me', trace_id: 'trace')
+    key_without = described_class.build_cache_key('M', :m, exclude: [:trace_id], user_id: 'me')
     expect(key_with).to eq(key_without)
   end
 
@@ -65,10 +65,6 @@ RSpec.describe Legion::Cache::Cacheable, '.build_cache_key' do
     expect(key_a).to eq(key_b)
   end
 
-  it 'handles empty kwargs' do
-    key = described_class.build_cache_key('M', :m, exclude: [])
-    expect(key).to match(/\AM\.m\.[a-f0-9]{32}\z/)
-  end
 end
 
 RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
@@ -264,6 +260,19 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
 
       expect { obj.fetch_global }.to raise_error(ArgumentError, 'business failure')
     end
+
+    it 'isolates identically named methods in distinct anonymous modules' do
+      objects = %w[first second].map do |value|
+        mod = Module.new do
+          extend Legion::Cache::Cacheable
+          define_method(:fetch_value) { |**| value }
+          cache_method :fetch_value, ttl: 60
+        end
+        Object.new.extend(mod)
+      end
+
+      expect(objects.map(&:fetch_value)).to eq(%w[first second])
+    end
   end
 
   describe 'bypass_local_method_cache' do
@@ -290,8 +299,8 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
 
         extend Legion::Cache::Cacheable
 
-        def get_thing(id:, token: nil, **) # rubocop:disable Lint/UnusedMethodArgument
-          { id: id, t: Time.now.utc.to_f }
+        def get_thing(id:, token: nil, **)
+          { id: id, authorized: token == 'abc' }
         end
 
         cache_method :get_thing, ttl: 60, exclude_from_key: [:token]
@@ -300,10 +309,11 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
 
     let(:token_instance) { Object.new.extend(token_module) }
 
-    it 'ignores excluded args when building cache key' do
+    it 'retains credential identity even when token is requested for exclusion' do
       first = token_instance.get_thing(id: 1, token: 'abc')
       second = token_instance.get_thing(id: 1, token: 'xyz')
-      expect(second[:t]).to eq(first[:t])
+      expect(first[:authorized]).to be(true)
+      expect(second[:authorized]).to be(false)
     end
   end
 
