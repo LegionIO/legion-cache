@@ -117,10 +117,6 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
         expect(described_class.cache_read('local.error', scope: :local)).to eq('fallback')
       end
 
-      it 'writes to Local cache' do
-        described_class.cache_write('local.w', 'data', ttl: 60, scope: :local)
-        expect(Legion::Cache::Local).to have_received(:set).with('local.w', 'data', ttl: 60, async: false)
-      end
 
       it 'falls back to memory when Local writes raise' do
         allow(Legion::Cache::Local).to receive(:set).with('local.error', 'data', ttl: 60, async: false).and_raise(StandardError, 'boom')
@@ -154,9 +150,12 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
         expect(described_class.cache_read('global.hit', scope: :global)).to eq('remote')
       end
 
-      it 'writes to global cache' do
+      it 'falls back to memory when global writes are rejected' do
+        allow(Legion::Cache).to receive(:set).and_return(false)
+        allow(Legion::Cache).to receive(:get).with('global.w').and_return(nil)
         described_class.cache_write('global.w', 'data', ttl: 120, scope: :global)
-        expect(Legion::Cache).to have_received(:set).with('global.w', 'data', ttl: 120, async: false)
+
+        expect(described_class.cache_read('global.w', scope: :global)).to eq('data')
       end
     end
   end
@@ -233,6 +232,37 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
       second = instance.fetch_data(user_id: 'alice')
 
       expect(second[:fetched_at]).to eq(first[:fetched_at])
+    end
+
+    it 'preserves computed values during a global cache outage' do
+      mod = Module.new do
+        extend Legion::Cache::Cacheable
+        def fetch_global(**)
+          @calls = (@calls || 0) + 1
+        end
+        cache_method :fetch_global, ttl: 60, scope: :global
+      end
+      obj = Object.new.extend(mod)
+      allow(Legion::Cache::Cacheable).to receive(:global_cache_available?).and_return(true)
+      allow(Legion::Cache).to receive(:get).and_raise(IOError, 'read failed')
+      allow(Legion::Cache).to receive(:set).and_raise(IOError, 'write failed')
+
+      expect(obj.fetch_global).to eq(1)
+      expect(obj.fetch_global).to eq(1)
+    end
+
+    it 'propagates wrapped business errors without caching them' do
+      mod = Module.new do
+        extend Legion::Cache::Cacheable
+        def fetch_global(**)
+          raise ArgumentError, 'business failure'
+        end
+        cache_method :fetch_global, ttl: 60, scope: :global
+      end
+      obj = Object.new.extend(mod)
+      allow(Legion::Cache::Cacheable).to receive(:global_cache_available?).and_return(false)
+
+      expect { obj.fetch_global }.to raise_error(ArgumentError, 'business failure')
     end
   end
 

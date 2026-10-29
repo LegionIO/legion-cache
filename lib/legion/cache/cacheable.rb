@@ -59,9 +59,8 @@ module Legion
       def self.cache_read(key, scope:)
         case scope
         when :global
-          return Legion::Cache.get(key) if global_cache_available?
-
-          memory_read(key)
+          result = global_cache_read(key)
+          result.equal?(LOCAL_CACHE_MISS) ? memory_read(key) : result
         else
           result = local_cache_read(key)
           result.equal?(LOCAL_CACHE_MISS) ? memory_read(key) : result
@@ -71,18 +70,11 @@ module Legion
       def self.cache_write(key, value, ttl:, scope:)
         case scope
         when :global
-          if global_cache_available?
-            Legion::Cache.set(key, value, ttl: ttl, async: false)
-          else
-            memory_write(key, value, ttl)
-          end
+          result = global_cache_write(key, value, ttl: ttl)
+          memory_write(key, value, ttl) unless result
         else
-          if local_cache_available?
-            result = local_cache_write(key, value, ttl: ttl)
-            memory_write(key, value, ttl) unless result
-          else
-            memory_write(key, value, ttl)
-          end
+          result = local_cache_write(key, value, ttl: ttl)
+          memory_write(key, value, ttl) unless result
         end
       end
 
@@ -92,6 +84,25 @@ module Legion
 
       def self.local_cache_available?
         defined?(Legion::Cache::Local) && Legion::Cache::Local.respond_to?(:connected?) && Legion::Cache::Local.connected?
+      end
+
+      def self.global_cache_read(key)
+        return LOCAL_CACHE_MISS unless global_cache_available?
+
+        result = Legion::Cache.get(key)
+        result.nil? ? LOCAL_CACHE_MISS : result
+      rescue StandardError => e
+        handle_exception(e, level: :warn, operation: :global_cache_read, key: key)
+        LOCAL_CACHE_MISS
+      end
+
+      def self.global_cache_write(key, value, ttl:)
+        return unless global_cache_available?
+
+        Legion::Cache.set(key, value, ttl: ttl, async: false)
+      rescue StandardError => e
+        handle_exception(e, level: :warn, operation: :global_cache_write, key: key, ttl: ttl)
+        nil
       end
 
       def self.local_cache_read(key)
