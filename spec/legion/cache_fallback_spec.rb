@@ -56,6 +56,9 @@ RSpec.describe 'cache backend transitions' do
 
   after do
     Legion::Cache.shutdown
+    Legion::Cache.instance_variable_set(:@active_shared_driver, nil)
+    Legion::Cache.instance_variable_set(:@shared_adapter, nil)
+    Legion::Cache.instance_variable_set(:@connection_options, nil)
     Legion::Cache::Memory.reset!
     Legion::Settings[:cache] = @settings
     Legion::Settings[:cache_local] = @local_settings
