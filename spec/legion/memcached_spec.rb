@@ -2,6 +2,7 @@
 
 require 'spec_helper'
 require 'legion/cache/memcached'
+require 'concurrent/atomic/atomic_boolean'
 
 RSpec.describe Legion::Cache::Memcached do
   let(:cache) { described_class.dup }
@@ -165,6 +166,60 @@ RSpec.describe Legion::Cache::Memcached do
 
       expect { cache.cas('counter') { raise IOError, 'application failure' } }.to raise_error(IOError, 'application failure')
       expect(cache.get('counter')).to eq(1)
+    end
+  end
+
+  describe 'backend health' do
+    before { cache.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(true)) }
+
+    it 'marks handled read connection failures disconnected' do
+      allow(dalli).to receive(:get).and_raise(Dalli::RingError, 'offline')
+
+      expect(cache.get('key')).to be_nil
+      expect(cache.connected?).to be(false)
+      expect(cache.instance_variable_get(:@connected)).to be_a(Concurrent::AtomicBoolean)
+    end
+
+    it 'does not treat a caller IO error as a backend failure' do
+      allow(dalli).to receive(:get).and_return(nil)
+
+      expect { cache.fetch('key') { raise IOError, 'application failure' } }.to raise_error(IOError, 'application failure')
+      expect(cache.connected?).to be(true)
+    end
+
+    it 'does not mark a rejected oversized value as disconnected' do
+      allow(dalli).to receive(:set).and_raise(Dalli::ValueOverMaxSize, 'oversized')
+
+      expect { cache.set('key', 'value') }.to raise_error(Dalli::ValueOverMaxSize)
+      expect(cache.connected?).to be(true)
+    end
+  end
+
+  describe '#client' do
+    before { cache.instance_variable_set(:@client, nil) }
+
+    it 'discards and closes a failed health-check pool before retrying setup' do
+      failed = instance_double(Dalli::Client, close: nil)
+      healthy = instance_double(Dalli::Client, alive!: true, get: 'healthy')
+      allow(failed).to receive(:alive!).and_raise(Dalli::RingError, 'offline')
+      allow(Dalli::Client).to receive(:new).and_return(failed, healthy)
+
+      expect { cache.client }.to raise_error(Dalli::RingError)
+      expect(cache.connected?).to be(false)
+      expect(failed).to have_received(:close)
+      cache.client
+      expect(cache.connected?).to be(true)
+      expect(cache.get('key')).to eq('healthy')
+    end
+
+    it 'bounds a stalled backend health check and closes its connection' do
+      stalled = instance_double(Dalli::Client, close: nil)
+      allow(stalled).to receive(:alive!) { sleep 60 }
+      allow(Dalli::Client).to receive(:new).and_return(stalled)
+
+      expect { cache.client(timeout: 0.01) }.to raise_error(Timeout::Error)
+      expect(cache.connected?).to be(false)
+      expect(stalled).to have_received(:close)
     end
   end
 end

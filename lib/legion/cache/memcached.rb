@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'openssl'
+require 'timeout'
 require 'dalli'
 require 'legion/logging/helper'
 require 'legion/cache/pool'
@@ -16,12 +17,17 @@ module Legion
                  username: nil, password: nil, logger: nil, **opts)
         return @client unless @client.nil?
 
-        settings = defined?(Legion::Settings) ? Legion::Settings[:cache] : {}
-        servers ||= settings[:servers] || []
+        settings = @cache_settings || (defined?(Legion::Settings) ? Legion::Settings[:cache] : {})
+        if server.nil? && servers.nil?
+          server = settings[:server]
+          servers = settings[:servers]
+        end
         @component_logger = logger || log
 
         @pool_size = pool_size || settings[:pool_size] || 10
         @timeout = timeout || settings[:timeout] || 5
+        health_timeout = Float(@timeout)
+        raise ArgumentError, 'memcached timeout must be finite and positive' unless health_timeout.finite? && health_timeout.positive?
 
         resolved = Legion::Cache::Settings.resolve_servers(
           driver: 'memcached', server: server, servers: Array(servers)
@@ -33,22 +39,29 @@ module Legion
         cache_opts[:serializer] ||= Legion::JSON
         cache_opts[:username] = username unless username.nil?
         cache_opts[:password] = password unless password.nil?
+        cache_opts[:socket_timeout] ||= health_timeout
+        @memcached_settings = cache_opts
 
         tls_ctx = memcached_tls_context(port: resolved.first.split(':').last.to_i)
-        cache_opts[:ssl_context] = tls_ctx if tls_ctx
+        cache_opts[:ssl_context] ||= tls_ctx if tls_ctx
 
         checkout_timeout = opts[:pool_checkout_timeout] || settings[:pool_checkout_timeout] || @timeout
-        @client = ConnectionPool.new(size: @pool_size, timeout: checkout_timeout) do
+        pool = ConnectionPool.new(size: @pool_size, timeout: checkout_timeout) do
           Dalli::Client.new(resolved, cache_opts)
         end
 
-        @connected = true
+        Timeout.timeout(health_timeout) { pool.with(&:alive!) }
+        @client = pool
+        cache_mark_connected(true)
         log.info "Memcached connected to #{resolved.join(', ')}"
         @client
       rescue StandardError => e
         handle_exception(e, level: :error, handled: false, operation: :memcached_client,
                             server: server, servers: Array(servers))
-        @connected = false
+        cache_mark_connected(false)
+        cache_backend_failed(e)
+        memcached_discard_pool(pool)
+        @client = nil
         raise
       end
 
@@ -57,6 +70,7 @@ module Legion
         log.debug { "[cache] GET #{key} hit=#{!result.nil?}" }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :warn, handled: true, operation: :memcached_get, key: key)
         nil
       end
@@ -98,6 +112,7 @@ module Legion
         log.debug { "[cache] SET_NX #{key} ttl=#{effective_ttl.inspect} result=#{result}" }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :error, handled: false, operation: :memcached_set_nx, key: key, ttl: effective_ttl)
         raise
       end
@@ -112,6 +127,7 @@ module Legion
         log.debug { "[cache] SET #{key} ttl=#{effective_ttl} success=#{result} value_class=#{value.class}" }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :error, handled: false, operation: :memcached_set_sync, key: key, ttl: effective_ttl)
         raise
       end
@@ -125,6 +141,7 @@ module Legion
         log.debug { "[cache] DELETE #{key} success=#{result}" }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :error, handled: false, operation: :memcached_delete_sync, key: key)
         raise
       end
@@ -134,6 +151,7 @@ module Legion
         log.debug { '[cache] FLUSH completed' }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :warn, handled: true, operation: :memcached_flush)
         nil
       end
@@ -146,6 +164,7 @@ module Legion
         log.debug { "[cache] MGET keys=#{keys.size} hits=#{result.size}" }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :warn, handled: true, operation: :memcached_mget, key_count: keys.size)
         {}
       end
@@ -167,11 +186,18 @@ module Legion
         log.debug { "[cache] MSET keys=#{hash.size} success=#{result}" }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :error, handled: false, operation: :memcached_mset_sync, key_count: hash.size)
         raise
       end
 
       private
+
+      def memcached_discard_pool(pool)
+        pool&.shutdown(&:close)
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :memcached_close_failed_pool)
+      end
 
       def memcached_cas_request(key, &)
         client.with(&)
@@ -182,10 +208,14 @@ module Legion
       end
 
       def default_ttl
+        return @memcached_settings[:default_ttl] || 3600 if @memcached_settings
+        return @cache_settings[:default_ttl] || 3600 if @cache_settings
+
         return 3600 unless defined?(Legion::Settings)
 
         Legion::Settings.dig(:cache, :default_ttl) || 3600
-      rescue StandardError
+      rescue StandardError => e
+        handle_exception(e, level: :warn, handled: true, operation: :memcached_default_ttl)
         3600
       end
 
@@ -202,6 +232,9 @@ module Legion
       end
 
       def memcached_tls_settings
+        return @memcached_settings[:tls] || {} if @memcached_settings
+        return @cache_settings[:tls] || {} if @cache_settings
+
         return {} unless defined?(Legion::Settings)
 
         Legion::Settings[:cache][:tls] || {}
