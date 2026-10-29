@@ -314,7 +314,12 @@ module Legion
       end
 
       def redis_tls_options(port:)
-        return {} unless defined?(Legion::Crypt::TLS)
+        unless defined?(Legion::Crypt::TLS)
+          settings = cache_tls_settings
+          return {} if settings.empty? || settings[:enabled] == false
+
+          raise ArgumentError, 'Legion::Crypt::TLS is required for configured Redis TLS'
+        end
 
         tls = Legion::Crypt::TLS.resolve(cache_tls_settings, port: port)
         return {} unless tls[:enabled]
@@ -323,6 +328,8 @@ module Legion
           verify_mode: tls[:verify] == :none ? OpenSSL::SSL::VERIFY_NONE : OpenSSL::SSL::VERIFY_PEER
         }
         ssl_params[:ca_file] = tls[:ca] if tls[:ca]
+        ssl_params[:cert] = OpenSSL::X509::Certificate.new(File.read(tls[:cert])) if tls[:cert]
+        ssl_params[:key] = OpenSSL::PKey.read(File.read(tls[:key])) if tls[:key]
 
         { ssl: true, ssl_params: ssl_params }
       end

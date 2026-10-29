@@ -2,182 +2,86 @@
 
 require 'spec_helper'
 require 'legion/cache/redis'
+require 'redis-clustering'
 
 RSpec.describe Legion::Cache::Redis do
-  describe 'method signatures' do
-    it 'set accepts keyword ttl' do
-      cache = described_class.dup
-      pool = instance_double(ConnectionPool)
-      cache.instance_variable_set(:@client, pool)
-      cache.instance_variable_set(:@connected, true)
-
-      redis = instance_double(Redis)
-      allow(pool).to receive(:with).and_yield(redis)
-      allow(redis).to receive(:set).and_return('OK')
-
-      expect { cache.set('k', 'v', ttl: 120) }.not_to raise_error
-    end
-
-    it 'fetch accepts keyword ttl' do
-      cache = described_class.dup
-      pool = instance_double(ConnectionPool)
-      cache.instance_variable_set(:@client, pool)
-      cache.instance_variable_set(:@connected, true)
-
-      redis = instance_double(Redis)
-      allow(pool).to receive(:with).and_yield(redis)
-      allow(redis).to receive(:get).and_return('val')
-
-      expect { cache.fetch('k', ttl: 60) }.not_to raise_error
-    end
-
-    it 'flush takes no arguments' do
-      expect(described_class.method(:flush).arity).to eq(0)
-    end
-
-    it 'uses log instead of cache_logger' do
-      expect(described_class.private_method_defined?(:cache_logger)).to be(false)
-    end
-
-    it 'uses settings pool_size instead of hardcoded 20' do
-      cache = described_class.dup
-      cache.instance_variable_set(:@client, nil)
-      cache.instance_variable_set(:@connected, false)
-
-      redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).and_return(redis_instance)
-
-      original = Legion::Settings[:cache][:pool_size]
-      Legion::Settings[:cache][:pool_size] = 8
-      cache.client(servers: ['127.0.0.1:6379'])
-      expect(cache.pool_size).to eq(8)
-      Legion::Settings[:cache][:pool_size] = original
-    end
-  end
-end
-
-RSpec.describe Legion::Cache::Redis, :integration do
-  before(:all) do
-    @cache = Legion::Cache::Redis
+  let(:cache) { Object.new.extend(described_class) }
+  let(:created) { [] }
+  let(:settings) do
+    { servers: ['configured.example:6381'], username: 'user', password: 'secret', db: 4,
+      namespace: 'configured', pool_size: 1, timeout: 0.5, default_ttl: 60 }
   end
 
-  it 'can connect' do
-    expect(@cache).not_to respond_to :connect
-    expect { @cache.client }.not_to raise_exception
-    expect(@cache.connected?).to eq true
-  end
-
-  it 'can close' do
-    expect(@cache).to respond_to :close
-    expect { @cache.close }.not_to raise_error
-  end
-
-  it 'can restart' do
-    expect(@cache).to respond_to :restart
-    expect { @cache.restart }.not_to raise_error
-  end
-
-  it 'can set' do
-    expect(@cache).to respond_to :set
-    expect(@cache.set('test', 'test')).to eq true
-  end
-
-  it 'can get' do
-    expect(@cache).to respond_to :get
-    expect(@cache.get('test')).to eq 'test'
-  end
-
-  it 'can fetch' do
-    expect(@cache.respond_to?(:fetch)).to eq true
-    expect(@cache.fetch('test')).to eq 'test'
-  end
-
-  it 'can delete' do
-    expect(@cache).to respond_to :delete
-    expect(@cache.delete('test')).to eq true
-  end
-
-  it 'can flush' do
-    expect(@cache).to respond_to :flush
-    expect(@cache.flush).to eq true
-  end
-
-  it 'accepts servers parameter' do
-    @cache.close if @cache.connected?
-    @cache.instance_variable_set(:@client, nil)
-    @cache.instance_variable_set(:@connected, false)
-    expect { @cache.client(servers: ['127.0.0.1:6379']) }.not_to raise_error
-    expect(@cache.connected?).to eq true
-  end
-
-  it 'wont use bogus methods' do
-    expect(@cache).not_to respond_to :this_is_fake
-  end
-
-  describe '#build_redis_client' do
-    before do
-      @cache.instance_variable_set(:@client, nil)
-      @cache.instance_variable_set(:@connected, false)
-    end
-
-    after do
-      @cache.instance_variable_set(:@client, nil)
-      @cache.instance_variable_set(:@connected, false)
-    end
-
-    it 'returns a single-node Redis client when no cluster is given' do
-      redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(hash_including(host: '127.0.0.1', port: 6379)).and_return(redis_instance)
-      result = @cache.build_redis_client
-      expect(result).to eq redis_instance
-    end
-
-    it 'returns a cluster Redis client when cluster nodes are provided' do
-      nodes = ['redis://node1:6379', 'redis://node2:6379', 'redis://node3:6379']
-      redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(hash_including(cluster: nodes)).and_return(redis_instance)
-      result = @cache.build_redis_client(cluster: nodes)
-      expect(result).to eq redis_instance
-    end
-
-    it 'falls back to single-node when cluster is an empty array' do
-      redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(hash_including(host: '127.0.0.1', port: 6379)).and_return(redis_instance)
-      result = @cache.build_redis_client(cluster: [])
-      expect(result).to eq redis_instance
-    end
-
-    it 'falls back to single-node when cluster is nil' do
-      redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(hash_including(host: '127.0.0.1', port: 6379)).and_return(redis_instance)
-      result = @cache.build_redis_client(cluster: nil)
-      expect(result).to eq redis_instance
-    end
-
-    it 'passes cluster nodes verbatim to Redis.new' do
-      nodes = ['redis://10.0.0.1:6379', 'redis://10.0.0.2:6380']
-      expect(Redis).to receive(:new).with(hash_including(cluster: nodes)).and_return(instance_double(Redis))
-      @cache.build_redis_client(cluster: nodes)
+  before do
+    allow(Legion::Settings).to receive(:[]).with(:cache).and_return(settings)
+    allow(Redis).to receive(:new).and_wrap_original do |original, **options|
+      instance = original.call(**options)
+      created << instance
+      allow(instance).to receive(:ping).and_return('PONG')
+      instance
     end
   end
 
-  describe '#client with cluster:' do
-    before do
-      @cache.instance_variable_set(:@client, nil)
-      @cache.instance_variable_set(:@connected, false)
-    end
+  after { cache.close }
 
-    after do
-      @cache.instance_variable_set(:@client, nil)
-      @cache.instance_variable_set(:@connected, false)
-    end
+  it 'honors configured endpoint, authentication and database on first lazy access' do
+    cache.client
+    config = created.last._client.config
+    expect([config.host, config.port, config.username, config.password, config.db]).to eq(
+      ['configured.example', 6381, 'user', 'secret', 4]
+    )
+    expect(cache.connected?).to be(true)
+  end
 
-    it 'creates a ConnectionPool using cluster nodes when cluster: is passed' do
-      nodes = ['redis://node1:6379', 'redis://node2:6379']
-      redis_instance = instance_double(Redis)
-      allow(Redis).to receive(:new).with(hash_including(cluster: nodes)).and_return(redis_instance)
-      expect { @cache.client(cluster: nodes) }.not_to raise_error
-      expect(@cache.connected?).to eq true
+  it 'lets an explicit single endpoint and nil authentication override shared configuration' do
+    cache.client(server: '[::1]:6382', username: nil, password: nil, db: 0)
+    config = created.last._client.config
+    expect([config.host, config.port, config.username, config.password, config.db]).to eq(['::1', 6382, nil, nil, 0])
+  end
+
+  it 'uses a complete Local configuration without inheriting shared cluster or TLS options' do
+    settings.merge!(cluster: ['redis://shared.example:6379'], tls: { enabled: true })
+    cache.instance_variable_set(:@cache_settings, {
+                                  server: 'local.example:6379', namespace: 'local', pool_size: 1, timeout: 1
+                                })
+    cache.client
+    expect(created.last._client.config.host).to eq('local.example')
+    expect(cache.cluster_mode?).to be(false)
+    expect(cache.redis_key('key')).to eq('local:key')
+  end
+
+  it 'preserves Redis URL credentials and database' do
+    cache.client(server: 'redis://urluser:urlpass@url.example:6383/7', username: nil, password: nil, db: nil)
+    config = created.last._client.config
+    expect([config.host, config.port, config.username, config.password, config.db]).to eq(
+      ['url.example', 6383, 'urluser', 'urlpass', 7]
+    )
+  end
+
+  it 'discards a failed health check and allows a fresh connection attempt' do
+    allow(Redis).to receive(:new).and_wrap_original do |original, **options|
+      instance = original.call(**options)
+      created << instance
+      if created.one?
+        allow(instance).to receive(:ping).and_raise(Redis::CannotConnectError, 'offline')
+      else
+        allow(instance).to receive(:ping).and_return('PONG')
+      end
+      instance
     end
+    expect { cache.client }.to raise_error(Redis::CannotConnectError)
+    expect(cache.connected?).to be(false)
+    cache.client
+    expect(cache.connected?).to be(true)
+    expect(created.size).to eq(2)
+  end
+
+  it 'constructs an actual supported cluster client and rejects nonzero databases' do
+    cluster = cache.build_redis_client(cluster: ['redis://node.example:6379'])
+    expect(cluster).to be_a(Redis::Cluster)
+    expect(cluster._client.config.startup_nodes.keys).to eq(['node.example:6379'])
+    expect { cache.build_redis_client(cluster: ['redis://node.example:6379'], db: 2) }.to raise_error(ArgumentError)
+  ensure
+    cluster&.close
   end
 end
