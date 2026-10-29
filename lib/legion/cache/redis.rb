@@ -21,10 +21,11 @@ module Legion
         if opts.key?(:server) || opts.key?(:servers)
           settings[:server] = opts[:server]
           settings[:servers] = opts.fetch(:servers, [])
+          settings[:cluster] = nil unless opts.key?(:cluster)
         end
         @redis_settings = settings
-        @pool_size = settings.fetch(:pool_size, 10)
-        @timeout = settings.fetch(:timeout, 5)
+        @pool_size = settings[:pool_size] || 10
+        @timeout = settings[:timeout] || 5
         raise ArgumentError, 'Redis timeout must be positive' unless @timeout.positive?
 
         @cluster_mode = Array(settings[:cluster]).compact.any?

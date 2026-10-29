@@ -34,6 +34,7 @@ RSpec.describe Legion::Cache::Redis do
   end
 
   it 'lets an explicit single endpoint and nil authentication override shared configuration' do
+    settings[:cluster] = ['redis://shared.example:6379']
     cache.client(server: '[::1]:6382', username: nil, password: nil, db: 0)
     config = created.last._client.config
     expect([config.host, config.port, config.password, config.db]).to eq(['::1', 6382, nil, 0])
