@@ -2,6 +2,7 @@
 
 require 'openssl'
 require 'redis'
+require 'uri'
 require 'legion/logging/helper'
 require 'legion/cache/pool'
 require 'legion/cache/settings'
@@ -13,67 +14,68 @@ module Legion
       extend self
       extend Legion::Logging::Helper
 
-      def client(server: nil, servers: [], pool_size: nil, timeout: nil, # rubocop:disable Metrics/ParameterLists
-                 username: nil, password: nil, logger: nil, **opts)
+      def client(**opts)
         return @client unless @client.nil?
 
-        settings = defined?(Legion::Settings) ? Legion::Settings[:cache] : {}
-        pool_size ||= settings[:pool_size] || 10
-        timeout ||= settings[:timeout] || 5
-
-        cluster = opts.delete(:cluster)
-        replica = opts.delete(:replica) || false
-        fixed_hostname = opts.delete(:fixed_hostname)
-        db = opts.delete(:db)
-        reconnect_attempts = opts.delete(:reconnect_attempts) || [0, 0.5, 1]
-
-        @pool_size = pool_size
-        @timeout   = timeout
-        @cluster_mode = Array(cluster).compact.any?
-        @component_logger = logger || log
-
-        @connection_opts = { username: username, password: password, timeout: @timeout }.compact
-        @connection_opts.merge!(redis_tls_options(port: resolve_primary_port(server: server, servers: servers, cluster: cluster)))
-
-        checkout_timeout = opts[:pool_checkout_timeout] || settings[:pool_checkout_timeout] || @timeout
-        @client = ConnectionPool.new(size: pool_size, timeout: checkout_timeout) do
-          build_redis_client(server: server, servers: servers, cluster: cluster,
-                             replica: replica, fixed_hostname: fixed_hostname,
-                             username: username, password: password, db: db,
-                             reconnect_attempts: reconnect_attempts)
+        settings = redis_settings.merge(opts)
+        if opts.key?(:server) || opts.key?(:servers)
+          settings[:server] = opts[:server]
+          settings[:servers] = opts.fetch(:servers, [])
         end
-        @connected = true
-        log.info "Redis connected to #{resolved_redis_address(server: server, servers: servers, cluster: cluster)}"
+        @redis_settings = settings
+        @pool_size = settings.fetch(:pool_size, 10)
+        @timeout = settings.fetch(:timeout, 5)
+        raise ArgumentError, 'Redis timeout must be positive' unless @timeout.positive?
+
+        @cluster_mode = Array(settings[:cluster]).compact.any?
+        @component_logger = settings[:logger] || log
+        checkout_timeout = settings[:pool_checkout_timeout] || @timeout
+        pending_pool = ConnectionPool.new(size: @pool_size, timeout: checkout_timeout) do
+          build_redis_client(**settings.slice(:server, :servers, :cluster, :replica, :fixed_hostname,
+                                             :username, :password, :db, :reconnect_attempts))
+        end
+        pending_pool.with do |conn|
+          raise ::Redis::ConnectionError, 'Redis health check failed' unless conn.ping == 'PONG'
+        end
+        @client = pending_pool
+        cache_mark_connected(true)
         @client
       rescue StandardError => e
-        handle_exception(e, level: :error, handled: false, operation: :redis_client,
-                            server: server, servers: Array(servers), cluster_nodes: Array(cluster))
-        @connected = false
+        cache_mark_connected(false)
+        @client = nil
+        begin
+          pending_pool&.shutdown(&:close)
+        rescue StandardError => close_error
+          handle_exception(close_error, level: :warn, handled: true, operation: :redis_failed_pool_close)
+        end
+        handle_exception(e, level: :error, handled: false, operation: :redis_client)
         raise
       end
 
       def build_redis_client(server: nil, servers: [], cluster: nil, replica: false, fixed_hostname: nil, # rubocop:disable Metrics/ParameterLists
                              username: nil, password: nil, db: nil, reconnect_attempts: [0, 0.5, 1])
         nodes = Array(cluster).compact
+        options = { username: username, password: password, db: db, timeout: @timeout || 5,
+                    reconnect_attempts: reconnect_attempts }.compact
         if nodes.any?
-          opts = { cluster: nodes, reconnect_attempts: reconnect_attempts, timeout: @timeout }
-          opts[:replica] = true if replica
-          opts[:fixed_hostname] = fixed_hostname unless fixed_hostname.nil?
-          opts[:username] = username unless username.nil?
-          opts[:password] = password unless password.nil?
-          ::Redis.new(**opts)
+          require 'redis-clustering'
+          raise ArgumentError, 'Redis Cluster only supports database 0' unless db.nil? || db.to_i.zero?
+
+          options.merge!(redis_tls_options(port: resolve_primary_port(cluster: nodes)))
+          options[:replica] = replica
+          options[:fixed_hostname] = fixed_hostname unless fixed_hostname.nil?
+          ::Redis::Cluster.new(nodes: nodes, **options)
         else
-          resolved = Legion::Cache::Settings.resolve_servers(
-            driver: 'redis', server: server, servers: servers
-          )
-          host, port = Legion::Cache::Settings.parse_server_address(resolved.first, default_port: 6379)
-          redis_opts = { host: host, port: port.to_i, reconnect_attempts: reconnect_attempts,
-                         timeout: @timeout }
-          redis_opts[:username] = username unless username.nil?
-          redis_opts[:password] = password unless password.nil?
-          redis_opts[:db] = db unless db.nil?
-          redis_opts.merge!(redis_tls_options(port: port.to_i))
-          ::Redis.new(**redis_opts)
+          address = (Array(servers) + Array(server)).first
+          if address.to_s.start_with?('redis://', 'rediss://')
+            options[:url] = address
+            port = URI.parse(address).port || 6379
+          else
+            host, port = Legion::Cache::Settings.parse_server_address(address, default_port: 6379)
+            options.merge!(host: host, port: port)
+          end
+          options.merge!(redis_tls_options(port: port))
+          ::Redis.new(**options)
         end
       end
 
@@ -220,12 +222,16 @@ module Legion
         raw
       end
 
-      def default_ttl
-        return 3600 unless defined?(Legion::Settings)
+      def redis_settings
+        return @redis_settings if @redis_settings
+        return @cache_settings if @cache_settings
 
-        Legion::Settings.dig(:cache, :default_ttl) || 3600
-      rescue StandardError
-        3600
+        shared = defined?(Legion::Settings) ? Legion::Settings[:cache] : nil
+        Legion::Cache::Settings.default.merge(shared || {})
+      end
+
+      def default_ttl
+        redis_settings[:default_ttl]
       end
 
       def cluster_mget(conn, keys)
@@ -281,14 +287,11 @@ module Legion
       end
 
       def resolve_primary_port(server: nil, servers: [], cluster: nil)
-        nodes = Array(cluster).compact
-        return 6379 if nodes.any?
+        address = Array(cluster).compact.first || (Array(servers) + Array(server)).first
+        return address.fetch(:port, 6379).to_i if address.is_a?(Hash)
+        return URI.parse(address).port || 6379 if address.to_s.start_with?('redis://', 'rediss://')
 
-        resolved = Legion::Cache::Settings.resolve_servers(driver: 'redis', server: server, servers: Array(servers))
-        _, port = Legion::Cache::Settings.parse_server_address(resolved.first, default_port: 6379)
-        port.to_i
-      rescue StandardError
-        6379
+        Legion::Cache::Settings.parse_server_address(address, default_port: 6379).last
       end
 
       def redis_tls_options(port:)
@@ -306,12 +309,7 @@ module Legion
       end
 
       def cache_tls_settings
-        return {} unless defined?(Legion::Settings)
-
-        Legion::Settings[:cache][:tls] || {}
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :cache_tls_settings)
-        {}
+        redis_settings[:tls] || {}
       end
     end
   end
