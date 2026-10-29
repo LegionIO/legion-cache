@@ -310,10 +310,11 @@ module Legion
       end
 
       def memcached_hash_merge(full_key, new_fields)
-        current = memcached_hash_load(full_key) || {}
-        merged = current.merge(new_fields.transform_keys(&:to_s))
-        Legion::Cache.set(full_key, Legion::JSON.dump(merged), ttl: cache_default_ttl, async: false)
-        true
+        result = Legion::Cache.cas(full_key, ttl: cache_default_ttl) do |raw|
+          current = raw.nil? ? {} : Legion::JSON.load(raw).transform_keys(&:to_s)
+          Legion::JSON.dump(current.merge(new_fields.transform_keys(&:to_s)))
+        end
+        !!result
       end
 
       def memcached_hash_load(full_key)
@@ -329,14 +330,15 @@ module Legion
       end
 
       def memcached_hash_delete_fields(full_key, fields)
-        current = memcached_hash_load(full_key)
-        return 0 if current.nil?
-
-        str_fields = fields.map(&:to_s)
-        removed = str_fields.count { |f| current.key?(f) }
-        str_fields.each { |f| current.delete(f) }
-        Legion::Cache.set(full_key, Legion::JSON.dump(current), ttl: cache_default_ttl, async: false)
-        removed
+        removed = 0
+        result = Legion::Cache.cas(full_key, ttl: cache_default_ttl) do |raw|
+          current = raw.nil? ? {} : Legion::JSON.load(raw).transform_keys(&:to_s)
+          str_fields = fields.map(&:to_s).uniq
+          removed = str_fields.count { |field| current.key?(field) }
+          str_fields.each { |field| current.delete(field) }
+          Legion::JSON.dump(current)
+        end
+        result ? removed : 0
       end
 
       def raise_sorted_set_unsupported(method)

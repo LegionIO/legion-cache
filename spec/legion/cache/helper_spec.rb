@@ -110,12 +110,12 @@ RSpec.describe Legion::Cache::Helper do
 
   describe 'mutation behavior' do
     let(:memory) { Legion::Cache::Memory }
-    let(:now) { Time.utc(2026, 10, 29) }
+    let(:now) { 1000.0 }
 
     before do
       Legion::Cache::Local.reset!
       memory.reset!
-      allow(Time).to receive(:now).and_return(now)
+      allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now)
       allow(Legion::Cache).to receive(:using_memory?).and_return(true)
       allow(Legion::Cache::Local).to receive(:build_driver).and_return(memory)
       allow(Legion::Cache::Local).to receive(:local_settings).and_return(Legion::Cache::Settings.local)
@@ -140,7 +140,7 @@ RSpec.describe Legion::Cache::Helper do
         it 'expires explicit TTLs before the default TTL' do
           subject.public_send(:"#{prefix}_set", ':short', 'short', ttl: 10, async: false)
           subject.public_send(:"#{prefix}_set", ':default', 'default', async: false)
-          allow(Time).to receive(:now).and_return(now + 11)
+          allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 11)
 
           expect(subject.public_send(:"#{prefix}_get", ':short')).to be_nil
           expect(subject.public_send(:"#{prefix}_get", ':default')).to eq('default')
@@ -149,7 +149,7 @@ RSpec.describe Legion::Cache::Helper do
         it 'expires PHI at the policy cap without shortening ordinary entries' do
           subject.public_send(:"#{prefix}_set", ':phi', 'sensitive', ttl: 7200, phi: true, async: false)
           subject.public_send(:"#{prefix}_set", ':ordinary', 'ordinary', ttl: 7200, async: false)
-          allow(Time).to receive(:now).and_return(now + 3601)
+          allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 3601)
 
           expect(subject.public_send(:"#{prefix}_get", ':phi')).to be_nil
           expect(subject.public_send(:"#{prefix}_get", ':ordinary')).to eq('ordinary')
@@ -160,7 +160,7 @@ RSpec.describe Legion::Cache::Helper do
           subject.public_send(:"#{prefix}_mset", values, ttl: 10, async: false)
           expect(subject.public_send(:"#{prefix}_mget", *values.keys)).to eq(values)
 
-          allow(Time).to receive(:now).and_return(now + 11)
+          allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 11)
           expect(subject.public_send(:"#{prefix}_mget", *values.keys)).to eq(':a' => nil, ':b' => nil)
         end
       end
@@ -169,10 +169,10 @@ RSpec.describe Legion::Cache::Helper do
     it 'uses the extension TTL override for shared-cache entries' do
       obj = custom_ttl_class.new
       obj.cache_set(':key', 'value', async: false)
-      allow(Time).to receive(:now).and_return(now + 599)
+      allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 599)
       expect(obj.cache_get(':key')).to eq('value')
 
-      allow(Time).to receive(:now).and_return(now + 601)
+      allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 601)
       expect(obj.cache_get(':key')).to be_nil
     end
   end
@@ -398,6 +398,51 @@ RSpec.describe Legion::Cache::Helper do
 
   # --- Issue #4: RedisHash helper methods ---
 
+  describe 'emulated hash mutations' do
+    before do
+      @mode = ENV.fetch('LEGION_MODE', nil)
+      ENV['LEGION_MODE'] = 'lite'
+      Legion::Cache.shutdown
+      Legion::Cache.setup
+      allow(subject).to receive(:cache_redis?).and_return(false)
+    end
+
+    after do
+      Legion::Cache.shutdown
+      @mode ? ENV['LEGION_MODE'] = @mode : ENV.delete('LEGION_MODE')
+      Legion::Cache::Memory.reset!
+    end
+
+    it 'retains fields added concurrently from the same initial snapshot' do
+      barrier = Concurrent::CyclicBarrier.new(2)
+      main_thread = Thread.current
+      allow(Legion::Cache).to receive(:get).and_wrap_original do |method, *args|
+        value = method.call(*args)
+        barrier.wait(2) unless Thread.current == main_thread
+        value
+      end
+
+      workers = %w[first second].map do |field|
+        Thread.new { subject.cache_hset(':atomic', field => field) }
+      end
+
+      expect(workers.map(&:value)).to eq([true, true])
+      expect(subject.cache_hgetall(':atomic')).to eq('first' => 'first', 'second' => 'second')
+    end
+
+    it 'merges and removes fields without dropping unrelated fields' do
+      subject.cache_hset(':hash', 'keep' => 'one', 'remove' => 'two')
+      subject.cache_hset(':hash', 'added' => 'three')
+
+      expect(subject.cache_hdel(':hash', 'remove', 'remove')).to eq(1)
+      expect(subject.cache_hgetall(':hash')).to eq('keep' => 'one', 'added' => 'three')
+    end
+
+    it 'returns zero when removing fields from an absent hash' do
+      expect(subject.cache_hdel(':absent', 'field')).to eq(0)
+    end
+  end
+
   describe '#cache_hset' do
     context 'with Redis backend' do
       before { allow(subject).to receive(:cache_redis?).and_return(true) }
@@ -410,29 +455,6 @@ RSpec.describe Legion::Cache::Helper do
       it 'returns false on error' do
         allow(Legion::Cache::RedisHash).to receive(:hset).and_raise(StandardError, 'fail')
         expect(subject.cache_hset(':h', {})).to be false
-      end
-    end
-
-    context 'with Memcached backend' do
-      before { allow(subject).to receive(:cache_redis?).and_return(false) }
-
-      it 'serializes hash as JSON via cache set (merge)' do
-        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return(nil)
-        expect(Legion::Cache).to receive(:set) do |key, json, **opts|
-          expect(key).to eq('microsoft_teams:h')
-          expect(opts).to eq(ttl: 3600, async: false)
-          expect(Legion::JSON.load(json)).to eq(f: 'v')
-        end
-        subject.cache_hset(':h', { 'f' => 'v' })
-      end
-
-      it 'merges new fields into existing JSON hash' do
-        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return('{"existing":"val"}')
-        expect(Legion::Cache).to receive(:set) do |_key, json, **_opts|
-          parsed = Legion::JSON.load(json)
-          expect(parsed).to include(existing: 'val', f: 'v')
-        end
-        subject.cache_hset(':h', { 'f' => 'v' })
       end
     end
   end
@@ -479,24 +501,6 @@ RSpec.describe Legion::Cache::Helper do
 
       it 'returns 0 on error' do
         allow(Legion::Cache::RedisHash).to receive(:hdel).and_raise(StandardError, 'fail')
-        expect(subject.cache_hdel(':h', 'f')).to eq(0)
-      end
-    end
-
-    context 'with Memcached backend' do
-      before { allow(subject).to receive(:cache_redis?).and_return(false) }
-
-      it 'removes specified fields from JSON hash and returns count' do
-        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return('{"a":"1","b":"2"}')
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:h', anything, ttl: 3600, async: false) do |_k, json, **_opts|
-          parsed = Legion::JSON.load(json)
-          expect(parsed.keys.map(&:to_s)).not_to include('a')
-        end
-        expect(subject.cache_hdel(':h', 'a')).to eq(1)
-      end
-
-      it 'returns 0 when key is absent' do
-        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return(nil)
         expect(subject.cache_hdel(':h', 'f')).to eq(0)
       end
     end

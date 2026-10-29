@@ -30,14 +30,14 @@ RSpec.describe Legion::Cache::Memcached do
       allow(dalli).to receive(:get).and_return(nil)
       error = IOError.new('application failure')
 
-      expect { cache.fetch('key') { raise error } }.to raise_error { |raised| expect(raised).to equal(error) }
+      expect { cache.fetch('key') { raise error } }.to(raise_error { |raised| expect(raised).to equal(error) })
     end
 
     it 'returns the computed value when the backend write fails' do
       allow(dalli).to receive(:get).and_return(nil)
       allow(dalli).to receive(:add).and_raise(Dalli::RingError, 'offline')
 
-      expect(cache.fetch('key') { 'computed' }).to eq('computed')
+      expect(cache.fetch('key') { 'computed' }).to eq('computed') # rubocop:disable Style/RedundantFetchBlock
     end
   end
 
@@ -157,8 +157,15 @@ RSpec.describe Legion::Cache::Memcached do
     it 'updates a stored nil using its CAS token rather than add' do
       cache.cas('nullable') { nil }
 
-      expect(cache.cas('nullable') { |current| current.nil? ? false : true }).to be(false)
+      expect(cache.cas('nullable') { |current| !current.nil? }).to be(false)
       expect(cache.get('nullable')).to be(false)
+    end
+
+    it 'fails boundedly when every attempted update is rejected' do
+      allow(dalli).to receive(:add).and_return(false)
+
+      expect { cache.cas('contended') { 'value' } }.to raise_error(RuntimeError, /retry limit/)
+      expect(cache.get('contended')).to be_nil
     end
 
     it 'propagates application errors without committing an update' do

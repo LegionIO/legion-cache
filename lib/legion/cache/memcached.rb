@@ -92,7 +92,7 @@ module Legion
         raise ArgumentError, 'a block is required' unless block_given?
 
         effective_ttl = ttl || default_ttl
-        loop do
+        20.times do
           value, token = memcached_cas_request(key) { |conn| conn.get_cas(key) }
           updated = yield value
           committed = memcached_cas_request(key) do |conn|
@@ -104,13 +104,14 @@ module Legion
           end
           return updated if committed
         end
+        raise 'Memcached CAS contention exceeded the retry limit'
       end
 
       def set_nx(key, value, ttl: nil)
         effective_ttl = ttl || default_ttl
-        result = client.with { |conn| !!conn.add(key, value, effective_ttl) }
+        result = client.with { |conn| conn.add(key, value, effective_ttl) }
         log.debug { "[cache] SET_NX #{key} ttl=#{effective_ttl.inspect} result=#{result}" }
-        result
+        !!result
       rescue StandardError => e
         cache_backend_failed(e)
         handle_exception(e, level: :error, handled: false, operation: :memcached_set_nx, key: key, ttl: effective_ttl)
@@ -123,9 +124,9 @@ module Legion
 
       def set_sync(key, value, ttl: nil, **)
         effective_ttl = ttl || default_ttl
-        result = client.with { |conn| !!conn.set(key, value, effective_ttl) }
+        result = client.with { |conn| conn.set(key, value, effective_ttl) }
         log.debug { "[cache] SET #{key} ttl=#{effective_ttl} success=#{result} value_class=#{value.class}" }
-        result
+        !!result
       rescue StandardError => e
         cache_backend_failed(e)
         handle_exception(e, level: :error, handled: false, operation: :memcached_set_sync, key: key, ttl: effective_ttl)
