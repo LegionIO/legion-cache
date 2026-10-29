@@ -2,6 +2,7 @@
 
 require 'spec_helper'
 require 'concurrent-ruby'
+require 'timeout'
 require 'legion/cache/async_writer'
 
 RSpec.describe Legion::Cache::AsyncWriter do
@@ -49,10 +50,28 @@ RSpec.describe Legion::Cache::AsyncWriter do
       expect(writer.processed_count).to eq(3)
     end
 
-    it 'falls back to synchronous when pool is not running' do
-      result = nil
-      writer.enqueue { result = 'sync_fallback' }
-      expect(result).to eq('sync_fallback')
+    it 'rejects work when the pool is not running without executing it' do
+      executed = false
+      expect(writer.enqueue { executed = true }).to be(false)
+      expect(executed).to be(false)
+    end
+
+    it 'rejects saturated work promptly without executing it on the caller' do
+      writer.start(pool_size: 1, queue_size: 1)
+      started = Queue.new
+      release = Queue.new
+      executed = []
+      expect(writer.enqueue { started << true; release.pop; executed << :first }).to be(true)
+      Timeout.timeout(2) { started.pop }
+      expect(writer.enqueue { executed << :second }).to be(true)
+      accepted = Timeout.timeout(2) { writer.enqueue { executed << :rejected; release.pop } }
+      expect(accepted).to be(false)
+      release << true
+      writer.stop(timeout: 2)
+      expect(executed).to eq(%i[first second])
+      expect(writer.processed_count).to eq(2)
+    ensure
+      release << true if release
     end
   end
 

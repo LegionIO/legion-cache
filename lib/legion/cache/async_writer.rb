@@ -34,7 +34,7 @@ module Legion
             min_threads:     1,
             max_threads:     ps,
             max_queue:       qs,
-            fallback_policy: :caller_runs
+            fallback_policy: :abort
           )
           log.info "Legion::Cache::AsyncWriter started pool_size=#{ps} queue_size=#{qs}"
         end
@@ -57,23 +57,17 @@ module Legion
 
       def enqueue(&block)
         executor = @executor
-        if executor&.running?
-          executor.post do
-            block.call
-            @processed.increment
-          rescue StandardError => e
-            handle_exception(e, level: :warn, handled: true, operation: :async_writer_job)
-            @failed.increment
-          end
-        else
-          begin
-            block.call
-            @processed.increment
-          rescue StandardError => e
-            handle_exception(e, level: :warn, handled: true, operation: :async_writer_sync_fallback)
-            @failed.increment
-          end
+        return false unless executor&.running?
+
+        executor.post do
+          block.call
+          @processed.increment
+        rescue StandardError => e
+          handle_exception(e, level: :warn, handled: true, operation: :async_writer_job)
+          @failed.increment
         end
+      rescue Concurrent::RejectedExecutionError
+        false
       end
 
       def running?
