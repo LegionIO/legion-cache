@@ -76,7 +76,7 @@ module Legion
 
       def set_nx(key, value, ttl: nil)
         effective_ttl = ttl || default_ttl
-        result = client.with { |conn| conn.add(key, value, effective_ttl) == true }
+        result = client.with { |conn| !!conn.add(key, value, effective_ttl) }
         log.debug { "[cache] SET_NX #{key} ttl=#{effective_ttl.inspect} result=#{result}" }
         result
       rescue StandardError => e
@@ -90,7 +90,7 @@ module Legion
 
       def set_sync(key, value, ttl: nil, **)
         effective_ttl = ttl || default_ttl
-        result = client.with { |conn| conn.set(key, value, effective_ttl).positive? }
+        result = client.with { |conn| !!conn.set(key, value, effective_ttl) }
         log.debug { "[cache] SET #{key} ttl=#{effective_ttl} success=#{result} value_class=#{value.class}" }
         result
       rescue StandardError => e

@@ -39,6 +39,23 @@ RSpec.describe Legion::Cache::Memcached do
       expect(cache.fetch('key') { 'computed' }).to eq('computed')
     end
   end
+
+  describe '#set_nx' do
+    it 'reports a successful Dalli CAS token as true' do
+      allow(dalli).to receive(:add).and_return(42, false)
+
+      expect(cache.set_nx('key', 'first')).to be(true)
+      expect(cache.set_nx('key', 'second')).to be(false)
+    end
+  end
+
+  describe '#set' do
+    it 'returns false when Dalli rejects a write' do
+      allow(dalli).to receive(:set).and_return(false)
+
+      expect(cache.set('key', 'value')).to be(false)
+    end
+  end
 end
 
 RSpec.describe Legion::Cache::Memcached, :integration do
