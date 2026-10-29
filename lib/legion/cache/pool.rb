@@ -1,6 +1,9 @@
 # frozen_string_literal: true
 
 require 'connection_pool'
+require 'concurrent'
+require 'timeout'
+require 'socket'
 require 'legion/logging/helper'
 
 module Legion
@@ -10,10 +13,7 @@ module Legion
       extend Legion::Logging::Helper
 
       def connected?
-        return false unless defined?(@connected)
-        return @connected.true? if @connected.respond_to?(:true?)
-
-        @connected == true
+        @connected&.value == true
       end
 
       def size
@@ -33,26 +33,45 @@ module Legion
       end
 
       def close
-        return unless @client
-
-        @client.shutdown(&:close)
+        pool = @client
         @client = nil
-        @connected = false
+        cache_mark_connected(false)
+        pool&.shutdown(&:close)
         log.info "#{pool_log_name} pool closed"
       end
 
       def restart(**opts)
         close
-        @client = nil
-        client_hash = opts
-        client_hash[:pool_size] = opts[:pool_size] if opts.key? :pool_size
-        client_hash[:timeout] = opts[:timeout] if opts.key? :timeout
-        client(**client_hash)
-        @connected = true
+        client(**opts)
         log.info "#{pool_log_name} pool restarted"
       end
 
       private
+
+      def cache_mark_connected(value)
+        @connected ||= Concurrent::AtomicBoolean.new(false)
+        @connected.value = value
+      end
+
+      def cache_backend_failed(error)
+        return unless cache_connection_error?(error)
+
+        cache_mark_connected(false)
+        @cache_failure_callback&.call(error)
+      end
+
+      def cache_connection_error?(error)
+        return true if error.is_a?(IOError) || error.is_a?(SystemCallError) || error.is_a?(Timeout::Error) || error.is_a?(SocketError)
+        return true if error.is_a?(ConnectionPool::TimeoutError)
+        if error.class.name == 'Redis::Cluster::CommandErrorCollection'
+          return error.errors.values.any? { |nested| cache_connection_error?(nested) }
+        end
+
+        error.class.ancestors.any? do |type|
+          %w[Dalli::NetworkError Dalli::RingError Redis::BaseConnectionError RedisClient::ConnectionError
+             Redis::Cluster::InitialSetupError Redis::Cluster::NodeMightBeDown].include?(type.name)
+        end
+      end
 
       def pool_log_name
         if respond_to?(:name)
