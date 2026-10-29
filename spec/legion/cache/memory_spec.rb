@@ -69,6 +69,18 @@ RSpec.describe Legion::Cache::Memory do
       expect(result).to eq('computed')
       expect(described_class.get('f-miss')).to eq('computed')
     end
+
+    it 'propagates application errors and leaves the key absent' do
+      expect { described_class.fetch('broken') { raise ArgumentError, 'business failure' } }
+        .to raise_error(ArgumentError, 'business failure')
+      expect(described_class.get('broken')).to be_nil
+    end
+
+    it 'preserves the computed result when caching the result fails' do
+      allow(described_class).to receive(:set).and_raise(IOError, 'cache unavailable')
+
+      expect(described_class.fetch('computed') { 42 }).to eq(42)
+    end
   end
 
   describe '.flush' do

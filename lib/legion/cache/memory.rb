@@ -230,11 +230,12 @@ module Legion
 
         log.debug { "[cache:memory] FETCH #{key} miss=true" }
         val = block&.call
-        set(key, val, ttl: ttl)
+        begin
+          set(key, val, ttl: ttl)
+        rescue StandardError => e
+          handle_exception(e, level: :warn, handled: true, operation: :memory_fetch_write)
+        end
         val
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :memory_fetch)
-        nil
       end
 
       def delete(key, async: true) # rubocop:disable Lint/UnusedMethodArgument
