@@ -10,6 +10,7 @@ module Legion
 
       DEFAULT_INITIAL_DELAY = 1
       DEFAULT_MAX_DELAY = 60
+      STOP_TIMEOUT = 1
 
       def initialize(tier:, connect_block:, enabled_block:, settings_key: :cache)
         @tier = tier
@@ -19,13 +20,15 @@ module Legion
         @attempts = Concurrent::AtomicFixnum.new(0)
         @thread = nil
         @mutex = Mutex.new
+        @wake = ConditionVariable.new
+        @stopping = false
         @stop_signal = Concurrent::AtomicBoolean.new(false)
         @next_retry_at = nil
       end
 
       def start
         @mutex.synchronize do
-          return if running?
+          return if @stopping || running?
 
           @stop_signal.make_false
           @thread = Thread.new { reconnect_loop }
@@ -34,13 +37,27 @@ module Legion
       end
 
       def stop
-        thread_to_join = nil
-        @mutex.synchronize do
+        thread_to_join = @mutex.synchronize do
+          @stopping = true unless @thread == Thread.current
           @stop_signal.make_true
-          thread_to_join = @thread
-          @thread = nil
+          @wake.broadcast
+          @thread
         end
-        thread_to_join&.join(5)
+        Thread.exit if thread_to_join == Thread.current
+
+        if thread_to_join && !thread_to_join.join(STOP_TIMEOUT)
+          thread_to_join.kill
+          unless thread_to_join.join(STOP_TIMEOUT)
+            raise ThreadError, "Legion::Cache::Reconnector[#{@tier}] could not stop its connection callback"
+          end
+        end
+
+        @mutex.synchronize do
+          if @thread == thread_to_join
+            @thread = nil
+            @stopping = false
+          end
+        end
         log.info "Legion::Cache::Reconnector[#{@tier}] stopped"
       end
 
@@ -61,18 +78,17 @@ module Legion
 
         until @stop_signal.true?
           unless @enabled_block.call
-            sleep 1
+            wait_for_retry(1)
             next
           end
 
           begin
             @next_retry_at = Time.now + delay
-            sleep delay
-            return if @stop_signal.true?
+            return unless wait_for_retry(delay)
 
             @connect_block.call
             count = @attempts.value
-            @attempts = Concurrent::AtomicFixnum.new(0)
+            @attempts.value = 0
             @next_retry_at = nil
             log.info "Legion::Cache::Reconnector[#{@tier}] reconnected after #{count} attempts"
             return
@@ -86,6 +102,21 @@ module Legion
         end
       rescue StandardError => e
         handle_exception(e, level: :error, handled: true, operation: :"reconnector_#{@tier}_loop")
+      ensure
+        @next_retry_at = nil
+      end
+
+      def wait_for_retry(delay)
+        deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + delay
+        @mutex.synchronize do
+          until @stop_signal.true?
+            remaining = deadline - ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+            return true unless remaining.positive?
+
+            @wake.wait(@mutex, remaining)
+          end
+        end
+        false
       end
 
       def configured_initial_delay
