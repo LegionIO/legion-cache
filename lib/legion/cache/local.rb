@@ -20,8 +20,8 @@ module Legion
           return false unless enabled?
           return true if connected?
 
-          @connection_options = (@connection_options || {}).merge(opts)
-          settings = local_settings.merge(@connection_options)
+          @connection_options = Legion::Cache::Settings.connection_options(@connection_options || {}, opts)
+          settings = Legion::Cache::Settings.connection_options(local_settings, @connection_options)
           driver_name = settings[:driver] || Legion::Cache::Settings.driver
           @driver_name = Legion::Cache::Settings.normalize_driver(driver_name)
           @driver = build_driver(driver_name)

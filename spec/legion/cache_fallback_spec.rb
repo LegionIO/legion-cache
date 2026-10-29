@@ -182,4 +182,18 @@ RSpec.describe 'cache backend transitions' do
       Array.new(2) { { servers: ['configured:6379'], username: 'user', password: 'secret', db: 7 } }
     )
   end
+
+  it 'replaces inherited endpoints and cluster configuration across explicit restarts' do
+    Legion::Settings[:cache].merge!(servers: ['inherited:6379'], cluster: ['inherited-cluster:6379'])
+    Legion::Cache.setup(server: 'override:6380', username: nil, password: nil, db: 2)
+    Legion::Cache.restart(servers: ['replacement:6381'])
+
+    first, second = backend[:connections]
+    expect(first.slice(:server, :servers, :cluster, :username, :password, :db)).to eq(
+      server: 'override:6380', servers: [], cluster: nil, username: nil, password: nil, db: 2
+    )
+    expect(second.slice(:server, :servers, :cluster, :db)).to eq(
+      server: nil, servers: ['replacement:6381'], cluster: nil, db: 2
+    )
+  end
 end

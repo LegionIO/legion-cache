@@ -60,7 +60,7 @@ module Legion
         return true if connected?
 
         @initialized = true
-        @connection_options = (@connection_options || {}).merge(opts)
+        @connection_options = Legion::Cache::Settings.connection_options(@connection_options || {}, opts)
         @setup_at = Time.now
         async_writer.start
         if ENV['LEGION_MODE'] == 'lite'
@@ -332,7 +332,8 @@ module Legion
 
       def setup_shared
         configure_shared_adapter!
-        @shared_adapter.instance_method(:client).bind_call(self, **shared_settings.merge(@connection_options || {}), logger: log)
+        settings = Legion::Cache::Settings.connection_options(shared_settings, @connection_options || {})
+        @shared_adapter.instance_method(:client).bind_call(self, **settings, logger: log)
         @using_local.make_false
         @using_memory.make_false
         cache_mark_connected(true)
@@ -352,7 +353,8 @@ module Legion
 
         close_existing_shared_client
         configure_shared_adapter!
-        @shared_adapter.instance_method(:client).bind_call(self, **shared_settings.merge(@connection_options || {}), logger: log)
+        settings = Legion::Cache::Settings.connection_options(shared_settings, @connection_options || {})
+        @shared_adapter.instance_method(:client).bind_call(self, **settings, logger: log)
         unless reconnect_enabled?
           close_existing_shared_client
           select_local_fallback
