@@ -3,6 +3,7 @@
 require 'digest'
 require 'securerandom'
 require 'legion/logging/helper'
+require 'legion/cache/memory'
 
 module Legion
   module Cache
@@ -10,6 +11,8 @@ module Legion
       extend Legion::Logging::Helper
 
       LOCAL_CACHE_MISS = Object.new
+
+      @memory_store = Legion::Cache::ExpiringStore.new
 
       def self.extended(base)
         base.instance_variable_set(:@cached_methods, {})
@@ -128,23 +131,19 @@ module Legion
 
       # In-memory fallback store (class-level, process-wide)
       def self.memory_store
-        @memory_store ||= {}
+        @memory_store
       end
 
       def self.memory_read(key)
-        entry = memory_store[key]
-        return nil unless entry
-        return nil if Time.now.utc > entry[:expires_at]
-
-        entry[:value]
+        memory_store.get(key)
       end
 
       def self.memory_write(key, value, ttl)
-        memory_store[key] = { value: value, expires_at: Time.now.utc + ttl }
+        memory_store.set(key, value, ttl: ttl)
       end
 
       def self.memory_clear!
-        @memory_store = {}
+        memory_store.clear
       end
     end
   end

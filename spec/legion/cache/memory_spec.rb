@@ -2,9 +2,11 @@
 
 require 'spec_helper'
 require 'legion/cache/memory'
+require 'timeout'
 
 RSpec.describe Legion::Cache::Memory do
   before { described_class.reset! }
+  after { described_class.reset! }
 
   describe '.get / .set' do
     it 'stores and retrieves a value' do
@@ -28,6 +30,22 @@ RSpec.describe Legion::Cache::Memory do
       sleep 0.06
 
       expect(described_class.get('refresh-me')).to eq('new')
+    end
+
+    it 'bounds stored entries using the configured capacity' do
+      described_class.setup(max_entries: 2)
+      described_class.set('first', 1)
+      described_class.set('second', 2)
+      described_class.set('third', 3)
+
+      expect(described_class.mget('first', 'second', 'third')).to eq('first' => nil, 'second' => 2, 'third' => 3)
+    end
+
+    it 'treats zero TTL as no expiration' do
+      described_class.set('persistent', 'value', ttl: 0)
+      sleep 0.01
+
+      expect(described_class.get('persistent')).to eq('value')
     end
   end
 
@@ -92,11 +110,6 @@ RSpec.describe Legion::Cache::Memory do
     end
   end
 
-  describe 'flush takes no arguments' do
-    it 'has arity 0' do
-      expect(described_class.method(:flush).arity).to eq(0)
-    end
-  end
 
   describe 'thread safety' do
     it 'handles concurrent reads and writes' do
@@ -110,5 +123,50 @@ RSpec.describe Legion::Cache::Memory do
       threads.each(&:join)
       expect(described_class.get('k0')).to eq(0)
     end
+  end
+end
+
+RSpec.describe Legion::Cache::ExpiringStore do
+  subject(:store) { described_class.new(max_entries: 2) }
+
+  after { store.close }
+
+  it 'reclaims inactive expired entries without reads or writes' do
+    store.set('inactive', Object.new, ttl: 0.01)
+
+    Timeout.timeout(2) { sleep 0.01 until store.size.zero? }
+    expect(store.size).to eq(0)
+  end
+
+  it 'reclaims expired entries before evicting live entries at capacity' do
+    allow(store).to receive(:monotonic_now).and_return(0)
+    store.set('live', 'keep')
+    store.set('expired', 'discard', ttl: 1)
+    allow(store).to receive(:monotonic_now).and_return(2)
+    store.set('new', 'latest')
+
+    expect(store.mget(%w[live expired new])).to eq('live' => 'keep', 'expired' => nil, 'new' => 'latest')
+  end
+
+  it 'stops cleanup promptly when closed even if the expiry clock is frozen' do
+    allow(store).to receive(:monotonic_now).and_return(0)
+    store.set('long-lived', 'value', ttl: 86_400)
+    worker = store.instance_variable_get(:@cleanup_thread)
+
+    Timeout.timeout(2) { store.close }
+    expect(worker).not_to be_alive
+    expect(store.size).to eq(0)
+  end
+
+  it 'stops cleanup once the last expiration is removed and restarts on demand' do
+    store.set('key', 'value', ttl: 86_400)
+    worker = store.instance_variable_get(:@cleanup_thread)
+    store.set('key', 'persistent')
+    expect(worker.join(2)).to eq(worker)
+
+    store.set('short-lived', 'value', ttl: 0.01)
+    Timeout.timeout(2) { sleep 0.01 until store.size == 1 }
+    expect(store.get('key')).to eq('persistent')
+    expect(store.get('short-lived')).to be_nil
   end
 end

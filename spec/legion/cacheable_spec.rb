@@ -6,6 +6,7 @@ require 'legion/cache/local'
 
 RSpec.describe Legion::Cache::Cacheable do
   before { described_class.memory_clear! }
+  after { described_class.memory_clear! }
 
   describe '.memory_write and .memory_read' do
     it 'stores and retrieves a value' do
@@ -18,8 +19,8 @@ RSpec.describe Legion::Cache::Cacheable do
     end
 
     it 'returns nil for expired entries' do
-      described_class.memory_write('expired', 'old', 0)
-      sleep 0.01
+      described_class.memory_write('expired', 'old', 0.01)
+      sleep 0.03
       expect(described_class.memory_read('expired')).to be_nil
     end
 
@@ -27,6 +28,26 @@ RSpec.describe Legion::Cache::Cacheable do
       described_class.memory_write('key', 'first', 60)
       described_class.memory_write('key', 'second', 60)
       expect(described_class.memory_read('key')).to eq('second')
+    end
+
+    it 'treats zero TTL as no expiration, like Memory' do
+      described_class.memory_write('persistent', 'value', 0)
+      sleep 0.01
+
+      expect(described_class.memory_read('persistent')).to eq('value')
+    end
+
+    it 'bounds the fallback and evicts the oldest entry' do
+      described_class.memory_store.max_entries = 2
+      described_class.memory_write('oldest', 1, nil)
+      described_class.memory_write('second', 2, nil)
+      described_class.memory_write('third', 3, nil)
+
+      expect(described_class.memory_read('oldest')).to be_nil
+      expect(described_class.memory_read('second')).to eq(2)
+      expect(described_class.memory_read('third')).to eq(3)
+    ensure
+      described_class.memory_store.max_entries = Legion::Cache::ExpiringStore::DEFAULT_MAX_ENTRIES
     end
   end
 
