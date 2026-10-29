@@ -37,7 +37,11 @@ RSpec.describe Legion::Cache::AsyncWriter do
       started = Queue.new
       release = Queue.new
       completed = []
-      writer.enqueue(key: :entry) { started << true; release.pop; completed << :first }
+      writer.enqueue(key: :entry) do
+        started << true
+        release.pop
+        completed << :first
+      end
       Timeout.timeout(2) { started.pop }
       writer.enqueue(key: :entry) { completed << :second }
       stopping = Thread.new { writer.stop(timeout: 2) }
@@ -57,7 +61,11 @@ RSpec.describe Legion::Cache::AsyncWriter do
       started = Queue.new
       release = Queue.new
       completed = []
-      writer.enqueue(key: :entry) { started << true; release.pop; completed << :blocked }
+      writer.enqueue(key: :entry) do
+        started << true
+        release.pop
+        completed << :blocked
+      end
       Timeout.timeout(2) { started.pop }
       writer.enqueue(key: :entry) { completed << :cancelled }
       writer.stop(timeout: 0)
@@ -97,10 +105,19 @@ RSpec.describe Legion::Cache::AsyncWriter do
       started = Queue.new
       release = Queue.new
       executed = []
-      expect(writer.enqueue { started << true; release.pop; executed << :first }).to be(true)
+      expect(writer.enqueue do
+        started << true
+        release.pop
+        executed << :first
+      end).to be(true)
       Timeout.timeout(2) { started.pop }
       expect(writer.enqueue { executed << :second }).to be(true)
-      accepted = Timeout.timeout(2) { writer.enqueue { executed << :rejected; release.pop } }
+      accepted = Timeout.timeout(2) do
+        writer.enqueue do
+          executed << :rejected
+          release.pop
+        end
+      end
       expect(accepted).to be(false)
       release << true
       writer.stop(timeout: 2)
@@ -117,11 +134,18 @@ RSpec.describe Legion::Cache::AsyncWriter do
       other_finished = Queue.new
       cache = Concurrent::Map.new
       observed = Queue.new
-      writer.enqueue(key: 'entry') { started << true; release.pop; cache[:entry] = :first }
+      writer.enqueue(key: 'entry') do
+        started << true
+        release.pop
+        cache[:entry] = :first
+      end
       Timeout.timeout(2) { started.pop }
       expect(writer.enqueue(key: 'entry') { observed << cache.delete(:entry) }).to be(true)
       expect(writer.enqueue(key: 'entry') { cache[:entry] = :last }).to be(true)
-      expect(writer.enqueue(key: 'other') { cache[:other] = :independent; other_finished << true }).to be(true)
+      expect(writer.enqueue(key: 'other') do
+        cache[:other] = :independent
+        other_finished << true
+      end).to be(true)
       Timeout.timeout(2) { other_finished.pop }
       expect(cache[:other]).to eq(:independent)
       expect(cache[:entry]).to be_nil
@@ -140,7 +164,11 @@ RSpec.describe Legion::Cache::AsyncWriter do
       started = Queue.new
       release = Queue.new
       executed = []
-      expect(writer.enqueue(key: :entry) { started << true; release.pop; executed << :first }).to be(true)
+      expect(writer.enqueue(key: :entry) do
+        started << true
+        release.pop
+        executed << :first
+      end).to be(true)
       Timeout.timeout(2) { started.pop }
       expect(writer.enqueue(key: :entry) { executed << :second }).to be(true)
       expect(writer.enqueue(key: :entry) { executed << :third }).to be(true)
@@ -159,7 +187,10 @@ RSpec.describe Legion::Cache::AsyncWriter do
       started = Queue.new
       release = Queue.new
       other_finished = Queue.new
-      writer.enqueue { started << true; release.pop }
+      writer.enqueue do
+        started << true
+        release.pop
+      end
       Timeout.timeout(2) { started.pop }
       writer.enqueue { other_finished << true }
       expect(Timeout.timeout(2) { other_finished.pop }).to be(true)

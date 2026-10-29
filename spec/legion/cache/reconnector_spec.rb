@@ -26,9 +26,9 @@ RSpec.describe Legion::Cache::Reconnector do
   after { reconnector.stop }
 
   def wait_until
-    deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 2
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2
     until yield
-      raise 'reconnector did not reach the expected state' if ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) >= deadline
+      raise 'reconnector did not reach the expected state' if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
 
       Thread.pass
     end
@@ -38,10 +38,10 @@ RSpec.describe Legion::Cache::Reconnector do
     it 'interrupts a long backoff without running a connection callback' do
       reconnector.start
       wait_until { reconnector.next_retry_at }
-      started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       reconnector.stop
 
-      expect(::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started).to be < 0.5
+      expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 0.5
       expect(reconnector.running?).to be(false)
       expect(reconnector.next_retry_at).to be_nil
       expect(connect_called.value).to eq(0)
@@ -68,10 +68,10 @@ RSpec.describe Legion::Cache::Reconnector do
         reconnector.start
         worker = entered.pop(timeout: 2)
         expect(worker).to be_a(Thread)
-        started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         reconnector.stop
 
-        expect(::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started).to be < 0.5
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 0.5
         expect(worker.alive?).to be(false)
         expect(finished.pop(timeout: 2)).to be(true)
         expect(reconnector.running?).to be(false)
@@ -164,7 +164,12 @@ RSpec.describe Legion::Cache::Reconnector do
   describe 'reconnect configuration' do
     let(:initial_delay) { 0 }
     let(:entered) { Queue.new }
-    let(:connect_block) { -> { connect_called.increment; entered << Thread.current } }
+    let(:connect_block) do
+      lambda {
+        connect_called.increment
+        entered << Thread.current
+      }
+    end
 
     it 'does not start when cache.reconnect.enabled is false, and can start after enabling it' do
       allow(Legion::Settings).to receive(:dig).with(:cache, :reconnect, :enabled).and_return(false)
@@ -210,7 +215,12 @@ RSpec.describe Legion::Cache::Reconnector do
   describe 'cache availability' do
     let(:initial_delay) { 0 }
     let(:checked) { Queue.new }
-    let(:enabled_block) { -> { checked << true; false } }
+    let(:enabled_block) do
+      lambda {
+        checked << true
+        false
+      }
+    end
 
     it 'does not connect when the cache is disabled' do
       reconnector.start

@@ -6,7 +6,7 @@ require 'legion/cache'
 RSpec.describe 'facade asynchronous admission' do
   before do
     Legion::Cache.shutdown
-    @mode = ENV['LEGION_MODE']
+    @mode = ENV.fetch('LEGION_MODE', nil)
     @async_settings = Legion::Settings[:cache][:async]
     ENV['LEGION_MODE'] = 'lite'
     Legion::Settings[:cache][:enabled] = true

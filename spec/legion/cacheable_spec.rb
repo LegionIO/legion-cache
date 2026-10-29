@@ -85,7 +85,6 @@ RSpec.describe Legion::Cache::Cacheable, '.build_cache_key' do
     key_b = described_class.build_cache_key('M', :m, exclude: [], a: 1, b: 2)
     expect(key_a).to eq(key_b)
   end
-
 end
 
 RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
@@ -133,7 +132,6 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
 
         expect(described_class.cache_read('local.error', scope: :local)).to eq('fallback')
       end
-
 
       it 'falls back to memory when Local writes raise' do
         allow(Legion::Cache::Local).to receive(:set).with('local.error', 'data', ttl: 60, async: false).and_raise(StandardError, 'boom')
@@ -254,6 +252,7 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
     it 'preserves computed values during a global cache outage' do
       mod = Module.new do
         extend Legion::Cache::Cacheable
+
         def fetch_global(**)
           @calls = (@calls || 0) + 1
         end
@@ -271,6 +270,7 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
     it 'propagates wrapped business errors without caching them' do
       mod = Module.new do
         extend Legion::Cache::Cacheable
+
         def fetch_global(**)
           raise ArgumentError, 'business failure'
         end
@@ -286,6 +286,7 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
       objects = %w[first second].map do |value|
         mod = Module.new do
           extend Legion::Cache::Cacheable
+
           define_method(:fetch_value) { |**| value }
           cache_method :fetch_value, ttl: 60
         end

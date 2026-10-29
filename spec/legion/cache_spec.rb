@@ -6,7 +6,7 @@ require 'legion/cache'
 RSpec.describe Legion::Cache do
   before do
     described_class.shutdown
-    @mode = ENV['LEGION_MODE']
+    @mode = ENV.fetch('LEGION_MODE', nil)
     ENV['LEGION_MODE'] = 'lite'
     Legion::Settings[:cache][:enabled] = true
     described_class.setup
@@ -18,7 +18,7 @@ RSpec.describe Legion::Cache do
   end
 
   it 'caches false values without recomputing them' do
-    expect(described_class.fetch('key') { false }).to be(false)
+    expect(described_class.fetch('key') { false }).to be(false) # rubocop:disable Style/RedundantFetchBlock
     expect(described_class.fetch('key') { raise 'unexpected recomputation' }).to be(false)
   end
 

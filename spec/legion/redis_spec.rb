@@ -5,7 +5,7 @@ require 'legion/cache/redis'
 require 'redis-clustering'
 
 RSpec.describe Legion::Cache::Redis do
-  let(:cache) { Object.new.extend(described_class) }
+  let(:cache) { Object.new.extend(described_class, Legion::Logging::Helper) }
   let(:created) { [] }
   let(:settings) do
     { servers: ['configured.example:6381'], username: 'user', password: 'secret', db: 4,
@@ -13,8 +13,9 @@ RSpec.describe Legion::Cache::Redis do
   end
 
   before do
+    allow(Legion::Settings).to receive(:[]).and_call_original
     allow(Legion::Settings).to receive(:[]).with(:cache).and_return(settings)
-    allow(Redis).to receive(:new).and_wrap_original do |original, **options|
+    allow(cache).to receive(:build_redis_client).and_wrap_original do |original, **options|
       instance = original.call(**options)
       created << instance
       allow(instance).to receive(:ping).and_return('PONG')
@@ -60,7 +61,7 @@ RSpec.describe Legion::Cache::Redis do
   end
 
   it 'discards a failed health check and allows a fresh connection attempt' do
-    allow(Redis).to receive(:new).and_wrap_original do |original, **options|
+    allow(cache).to receive(:build_redis_client).and_wrap_original do |original, **options|
       instance = original.call(**options)
       created << instance
       if created.one?

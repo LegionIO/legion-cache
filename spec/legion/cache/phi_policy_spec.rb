@@ -6,7 +6,7 @@ require 'legion/cache'
 RSpec.describe 'PHI retention on public write routes' do
   before do
     Legion::Cache.shutdown
-    @mode = ENV['LEGION_MODE']
+    @mode = ENV.fetch('LEGION_MODE', nil)
     @settings = Legion::Settings[:cache].dup
     @local_settings = Legion::Settings[:cache_local].dup
     ENV['LEGION_MODE'] = 'lite'
@@ -22,8 +22,8 @@ RSpec.describe 'PHI retention on public write routes' do
 
   after do
     Legion::Cache.shutdown
-    Legion::Settings[:cache] = @settings
-    Legion::Settings[:cache_local] = @local_settings
+    Legion::Settings[:cache].replace(@settings)
+    Legion::Settings[:cache_local].replace(@local_settings)
     @mode ? ENV['LEGION_MODE'] = @mode : ENV.delete('LEGION_MODE')
   end
 

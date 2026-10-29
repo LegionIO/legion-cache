@@ -22,7 +22,7 @@ RSpec.describe Legion::Cache::RedisHash do
     allow(connection).to receive(:zadd) { |key, score, member| sets[key][member] = score }
     allow(connection).to receive(:zrem) { |key, member| !sets[key].delete(member).nil? }
     allow(connection).to receive(:zrangebyscore) do |key, min, max, limit: nil|
-      members = sets[key].select { |_, score| score >= min && score <= max }.sort_by(&:last).map(&:first)
+      members = sets[key].select { |_, score| score.between?(min, max) }.sort_by(&:last).map(&:first)
       limit ? members.slice(*limit) : members
     end
   end

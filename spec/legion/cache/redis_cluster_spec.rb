@@ -5,7 +5,7 @@ require 'legion/cache/redis'
 require 'redis-clustering'
 
 RSpec.describe Legion::Cache::Redis, 'namespaces and cluster operations' do
-  let(:cache) { Object.new.extend(described_class) }
+  let(:cache) { Object.new.extend(described_class, Legion::Logging::Helper) }
   let(:connection) { instance_double(Redis) }
   let(:pool) { instance_double(ConnectionPool) }
   let(:stored) { {} }
@@ -28,7 +28,7 @@ RSpec.describe Legion::Cache::Redis, 'namespaces and cluster operations' do
 
       keys.map { |key| stored[key] }
     end
-    allow(connection).to receive(:scan_each) do |match:, count:, &block|
+    allow(connection).to receive(:scan_each) do |match:, **, &block|
       stored.keys.select { |key| File.fnmatch(match, key) }.each(&block)
     end
   end

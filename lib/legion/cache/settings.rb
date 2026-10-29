@@ -85,9 +85,7 @@ module Legion
         resolved = settings.merge(overrides)
         resolved[:servers] = [] if overrides.key?(:server) && !overrides.key?(:servers)
         resolved[:server] = nil if overrides.key?(:servers) && !overrides.key?(:server)
-        if (overrides.key?(:server) || overrides.key?(:servers)) && !overrides.key?(:cluster)
-          resolved[:cluster] = nil
-        end
+        resolved[:cluster] = nil if (overrides.key?(:server) || overrides.key?(:servers)) && !overrides.key?(:cluster)
         resolved
       end
 

@@ -40,9 +40,9 @@ module Legion
         log.info "#{pool_log_name} pool closed"
       end
 
-      def restart(**opts)
+      def restart(**)
         close
-        client(**opts)
+        client(**)
         log.info "#{pool_log_name} pool restarted"
       end
 
@@ -63,9 +63,7 @@ module Legion
       def cache_connection_error?(error)
         return true if error.is_a?(IOError) || error.is_a?(SystemCallError) || error.is_a?(Timeout::Error) || error.is_a?(SocketError)
         return true if error.is_a?(ConnectionPool::TimeoutError)
-        if error.class.name == 'Redis::Cluster::CommandErrorCollection'
-          return error.errors.values.any? { |nested| cache_connection_error?(nested) }
-        end
+        return error.errors.values.any? { |nested| cache_connection_error?(nested) } if error.instance_of?(::Redis::Cluster::CommandErrorCollection)
 
         error.class.ancestors.any? do |type|
           %w[Dalli::NetworkError Dalli::RingError Redis::BaseConnectionError RedisClient::ConnectionError

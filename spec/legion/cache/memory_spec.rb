@@ -79,7 +79,7 @@ RSpec.describe Legion::Cache::Memory do
     it 'preserves the computed result when caching the result fails' do
       allow(described_class).to receive(:set).and_raise(IOError, 'cache unavailable')
 
-      expect(described_class.fetch('computed') { 42 }).to eq(42)
+      expect(described_class.fetch('computed') { 42 }).to eq(42) # rubocop:disable Style/RedundantFetchBlock
     end
   end
 
@@ -121,7 +121,6 @@ RSpec.describe Legion::Cache::Memory do
       expect(result).to eq('fetched')
     end
   end
-
 
   describe '.cas' do
     it 'serializes concurrent read-modify-write operations without lost updates' do
@@ -214,7 +213,7 @@ RSpec.describe Legion::Cache::ExpiringStore do
   it 'reclaims inactive expired entries without reads or writes' do
     store.set('inactive', Object.new, ttl: 0.01)
 
-    Timeout.timeout(2) { sleep 0.01 until store.size.zero? }
+    Timeout.timeout(2) { sleep 0.01 until store.size.zero? } # rubocop:disable Style/ZeroLengthPredicate
     expect(store.size).to eq(0)
   end
 

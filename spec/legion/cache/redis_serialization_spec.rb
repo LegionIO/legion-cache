@@ -4,7 +4,7 @@ require 'spec_helper'
 require 'legion/cache/redis'
 
 RSpec.describe 'Redis cached Ruby values' do
-  let(:cache) { Object.new.extend(Legion::Cache::Redis) }
+  let(:cache) { Object.new.extend(Legion::Cache::Redis, Legion::Logging::Helper) }
   let(:pool) { instance_double(ConnectionPool) }
   let(:redis) { instance_double(Redis) }
   let(:values) { {} }
@@ -60,7 +60,7 @@ RSpec.describe 'Redis cached Ruby values' do
 
   it 'propagates the original fetch block exception' do
     error = Redis::ConnectionError.new('application failure')
-    expect { cache.fetch('missing') { raise error } }.to raise_error { |raised| expect(raised).to equal(error) }
+    expect { cache.fetch('missing') { raise error } }.to(raise_error { |raised| expect(raised).to equal(error) })
   end
 
   describe 'atomic read/modify/write' do
@@ -114,7 +114,7 @@ RSpec.describe 'Redis cached Ruby values' do
     it 'does not commit when the user block raises' do
       cache.set('key', 'original')
       error = Redis::ConnectionError.new('user error')
-      expect { cache.cas('key') { raise error } }.to raise_error { |raised| expect(raised).to equal(error) }
+      expect { cache.cas('key') { raise error } }.to(raise_error { |raised| expect(raised).to equal(error) })
       expect(cache.get('key')).to eq('original')
     end
   end

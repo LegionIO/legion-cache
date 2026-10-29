@@ -9,6 +9,7 @@ RSpec.describe 'cache backend transitions' do
     state = backend
     Module.new do
       include Legion::Cache::Pool
+
       define_method(:client) do |**options|
         raise IOError, 'backend unavailable' unless state[:available]
 
@@ -60,8 +61,8 @@ RSpec.describe 'cache backend transitions' do
     Legion::Cache.instance_variable_set(:@shared_adapter, nil)
     Legion::Cache.instance_variable_set(:@connection_options, nil)
     Legion::Cache::Memory.reset!
-    Legion::Settings[:cache] = @settings
-    Legion::Settings[:cache_local] = @local_settings
+    Legion::Settings[:cache].replace(@settings)
+    Legion::Settings[:cache_local].replace(@local_settings)
     ENV['LEGION_MODE'] = @mode if @mode
   end
 

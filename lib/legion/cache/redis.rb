@@ -33,7 +33,7 @@ module Legion
         checkout_timeout = settings[:pool_checkout_timeout] || @timeout
         pending_pool = ConnectionPool.new(size: @pool_size, timeout: checkout_timeout) do
           build_redis_client(**settings.slice(:server, :servers, :cluster, :replica, :fixed_hostname,
-                                             :username, :password, :db, :reconnect_attempts))
+                                              :username, :password, :db, :reconnect_attempts))
         end
         pending_pool.with do |conn|
           raise ::Redis::ConnectionError, 'Redis health check failed' unless conn.ping == 'PONG'

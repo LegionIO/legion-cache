@@ -49,9 +49,7 @@ module Legion
 
         if thread_to_join && !thread_to_join.join(STOP_TIMEOUT)
           thread_to_join.kill
-          unless thread_to_join.join(STOP_TIMEOUT)
-            raise ThreadError, "Legion::Cache::Reconnector[#{@tier}] could not stop its connection callback"
-          end
+          raise ThreadError, "Legion::Cache::Reconnector[#{@tier}] could not stop its connection callback" unless thread_to_join.join(STOP_TIMEOUT)
         end
 
         @mutex.synchronize do

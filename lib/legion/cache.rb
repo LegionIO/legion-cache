@@ -103,10 +103,10 @@ module Legion
         @using_memory.value
       end
 
-      def client(**opts)
+      def client(**)
         return nil unless enabled?
 
-        setup(**opts) unless @initialized
+        setup(**) unless @initialized
         return Legion::Cache::Memory.client if using_memory?
         return Legion::Cache::Local.client if using_local?
         return nil unless connected?
@@ -136,6 +136,7 @@ module Legion
 
       def set(key, value, ttl: nil, async: true, phi: false)
         return false unless enabled?
+
         setup unless @initialized || connected?
         return false unless connected?
 
@@ -159,10 +160,10 @@ module Legion
         cache_operation(:set_sync, key, value, ttl: resolve_ttl(ttl, phi: phi), failure: false)
       end
 
-      def cas(key, ttl: nil, phi: false, &block)
+      def cas(key, ttl: nil, phi: false, &)
         return false unless enabled?
 
-        cache_operation(:cas, key, ttl: resolve_ttl(ttl, phi: phi), failure: false, &block)
+        cache_operation(:cas, key, ttl: resolve_ttl(ttl, phi: phi), failure: false, &)
       end
 
       def fetch(key, ttl: nil)
@@ -177,6 +178,7 @@ module Legion
 
       def delete(key, async: true)
         return false unless enabled?
+
         setup unless @initialized || connected?
         return false unless connected?
 
@@ -229,9 +231,9 @@ module Legion
         shutdown
       end
 
-      def restart(**opts)
+      def restart(**)
         shutdown
-        setup(**opts)
+        setup(**)
       end
 
       def size
@@ -264,22 +266,16 @@ module Legion
 
       private
 
-      def async_writer
-        @async_writer
-      end
+      attr_reader :async_writer
 
-      def cache_operation(operation, *args, failure:, **opts, &block)
+      def cache_operation(operation, *, failure:, **, &block)
         return failure unless enabled?
 
         setup unless @initialized || connected?
         return failure unless connected?
 
-        target = if using_memory?
-                   Legion::Cache::Memory
-                 elsif using_local?
-                   Legion::Cache::Local
-                 end
-        return target.public_send(operation, *args, **opts, &block) if target
+        return Legion::Cache::Memory.public_send(operation, *, **, &block) if using_memory?
+        return Legion::Cache::Local.public_send(operation, *, **, &block) if using_local?
 
         configure_shared_adapter!
         user_error = nil
@@ -292,7 +288,7 @@ module Legion
                     end
                   end
         begin
-          result = @shared_adapter.instance_method(operation).bind_call(self, *args, **opts, &guarded)
+          result = @shared_adapter.instance_method(operation).bind_call(self, *, **, &guarded)
         rescue StandardError => e
           raise if e.equal?(user_error) || !cache_connection_error?(e)
 
@@ -300,7 +296,7 @@ module Legion
           handle_exception(e, level: :warn, handled: true, operation: operation)
           result = failure
         end
-        return Legion::Cache::Local.public_send(operation, *args, **opts, &block) if using_local? && connected?
+        return Legion::Cache::Local.public_send(operation, *, **, &block) if using_local? && connected?
 
         connected? ? result : failure
       end
@@ -377,6 +373,7 @@ module Legion
         close_existing_shared_client
         @shared_adapter = build_shared_adapter(driver)
         extend @shared_adapter
+
         @active_shared_driver = driver
       end
 

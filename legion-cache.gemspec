@@ -31,6 +31,6 @@ Gem::Specification.new do |spec|
   spec.add_dependency 'dalli', '>= 3.0', '< 5.0'
   spec.add_dependency 'legion-logging', '>= 1.5.0'
   spec.add_dependency 'legion-settings', '>= 1.3.12'
-  spec.add_dependency 'redis', '>= 5.0'
+  spec.add_dependency 'redis', '>= 5.4.1', '< 7.0'
   spec.add_dependency 'redis-clustering', '>= 5.4.1', '< 7.0'
 end

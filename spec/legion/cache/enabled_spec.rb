@@ -34,7 +34,7 @@ RSpec.describe 'disabled cache operations' do
       expect(cache.delete_sync('key')).to be(false)
       expect(cache.flush).to be(false)
       expect(cache.cas('key') { raise 'must not run' }).to be(false)
-      expect(cache.fetch('key') { 'computed' }).to eq('computed')
+      expect(cache.fetch('key') { 'computed' }).to eq('computed') # rubocop:disable Style/RedundantFetchBlock
       expect(cache.get('key')).to be_nil
     end
   end

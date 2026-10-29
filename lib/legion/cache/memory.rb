@@ -106,7 +106,7 @@ module Legion
       private
 
       def expiry_deadline(ttl)
-        return if ttl.nil? || ttl == 0
+        return if ttl.nil? || ttl.zero?
         raise ArgumentError, 'ttl must be a finite nonnegative number' unless ttl.is_a?(Numeric) && ttl.real? && ttl.finite? && ttl.positive?
 
         monotonic_now + ttl
@@ -195,9 +195,9 @@ module Legion
         @connected.true?
       end
 
-      def restart(**options)
+      def restart(**)
         shutdown
-        setup(**options)
+        setup(**)
       rescue StandardError => e
         @connected.make_false
         handle_exception(e, level: :warn, handled: true, operation: :memory_restart)
@@ -231,9 +231,9 @@ module Legion
         true
       end
 
-      def cas(key, ttl: nil, phi: false, &block)
+      def cas(key, ttl: nil, phi: false, &)
         ttl = enforce_phi_ttl(ttl) if phi
-        value = @store.cas(key, ttl: ttl, &block)
+        value = @store.cas(key, ttl: ttl, &)
         log.debug { "[cache:memory] CAS #{key} ttl=#{ttl.inspect}" }
         value
       end
@@ -323,9 +323,7 @@ module Legion
                 3600
               end
         max = 3600 if max.nil?
-        unless max.is_a?(Numeric) && max.real? && max.finite? && max.positive?
-          raise ArgumentError, 'phi_max_ttl must be a finite positive number'
-        end
+        raise ArgumentError, 'phi_max_ttl must be a finite positive number' unless max.is_a?(Numeric) && max.real? && max.finite? && max.positive?
         return max if ttl.nil?
         raise ArgumentError, 'ttl must be a finite number' unless ttl.is_a?(Numeric) && ttl.real? && ttl.finite?
 

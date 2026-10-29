@@ -5,7 +5,6 @@ require 'legion/cache'
 require 'legion/cache/local'
 
 RSpec.describe Legion::Cache::Local do
-
   describe 'asynchronous mutations' do
     let(:entered) { Queue.new }
     let(:release) { Queue.new }
@@ -40,6 +39,11 @@ RSpec.describe Legion::Cache::Local do
     }.each do |operation, (driver_method, arguments, expected)|
       it "returns before a blocked #{operation} finishes and drains it before shutdown" do
         memory.set_sync('key', 'original')
+        closed_values = Queue.new
+        allow(memory).to receive(:close).and_wrap_original do |method|
+          closed_values << memory.get('key')
+          method.call
+        end
         allow(memory).to receive(driver_method).and_wrap_original do |method, *args, **opts|
           entered << Thread.current
           release.pop
@@ -56,7 +60,7 @@ RSpec.describe Legion::Cache::Local do
         release << true
         described_class.shutdown
 
-        expect(memory.get('key')).to eq(expected)
+        expect(closed_values.pop(timeout: 2)).to eq(expected)
       end
     end
 

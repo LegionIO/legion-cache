@@ -34,7 +34,7 @@ RSpec.describe 'Redis TLS configuration' do
 
   it 'does not inherit shared TLS configuration when Local explicitly disables it' do
     cache.instance_variable_set(:@cache_settings, { tls: { enabled: false } })
-    allow(Legion::Crypt::TLS).to receive(:resolve) do |settings, port:|
+    allow(Legion::Crypt::TLS).to receive(:resolve) do |settings, **|
       { enabled: settings[:enabled], verify: :peer }
     end
     client = cache.build_redis_client(server: 'plain.example:6379')

@@ -65,7 +65,7 @@ module Legion
           local_operation(:get, key, failure: nil)
         end
 
-        def set(key, value, ttl: nil, async: true, phi: false, **)
+        def set(key, value, ttl: nil, async: true, phi: false, **) # rubocop:disable Metrics/ParameterLists
           return false unless enabled? && connected?
 
           ttl = local_write_ttl(ttl, phi: phi)
@@ -84,8 +84,8 @@ module Legion
           local_operation(:set_nx, key, value, ttl: local_write_ttl(ttl, phi: phi), failure: false)
         end
 
-        def cas(key, ttl: nil, phi: false, &block)
-          local_operation(:cas, key, ttl: local_write_ttl(ttl, phi: phi), failure: false, &block)
+        def cas(key, ttl: nil, phi: false, &)
+          local_operation(:cas, key, ttl: local_write_ttl(ttl, phi: phi), failure: false, &)
         end
 
         def fetch(key, ttl: nil)
@@ -141,10 +141,10 @@ module Legion
           { driver: driver_name, servers: Array(local_settings[:servers]), enabled: enabled?, connected: connected? }.freeze
         end
 
-        def client(**opts)
+        def client(**)
           return nil unless enabled?
 
-          setup(**opts) unless @driver
+          setup(**) unless @driver
           @driver&.client if connected?
         end
 
@@ -152,9 +152,9 @@ module Legion
           shutdown
         end
 
-        def restart(**opts)
+        def restart(**)
           shutdown
-          setup(**opts)
+          setup(**)
         end
 
         def size
@@ -180,7 +180,7 @@ module Legion
 
         private
 
-        def local_operation(operation, *args, failure:, **opts, &block)
+        def local_operation(operation, *, failure:, **, &block)
           return failure unless enabled? && connected? && @driver
 
           user_error = nil
@@ -192,7 +192,7 @@ module Legion
                         raise
                       end
                     end
-          @driver.public_send(operation, *args, **opts, &guarded)
+          @driver.public_send(operation, *, **, &guarded)
         rescue StandardError => e
           raise if e.equal?(user_error) || !cache_connection_error?(e)
 
