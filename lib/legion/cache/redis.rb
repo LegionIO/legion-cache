@@ -150,7 +150,7 @@ module Legion
         qualified = redis_key(key)
         user_error = nil
         client.with do |conn|
-          loop do
+          10.times do
             value = nil
             committed = conn.watch(qualified) do |watched|
               current = deserialize_value(watched.get(qualified))
@@ -165,6 +165,7 @@ module Legion
             end
             return value unless committed.nil?
           end
+          raise ::Redis::CommandError, 'Redis CAS conflicted after 10 attempts'
         end
       rescue StandardError => e
         raise if e.equal?(user_error)

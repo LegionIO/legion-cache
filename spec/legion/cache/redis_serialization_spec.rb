@@ -104,6 +104,13 @@ RSpec.describe 'Redis cached Ruby values' do
       expect(cache.get('key')).to eq(result)
     end
 
+    it 'surfaces contention exhaustion without committing a speculative value' do
+      cache.set('key', 'original')
+      allow(watched).to receive(:multi).and_return(nil)
+      expect { cache.cas('key') { 'replacement' } }.to raise_error(Redis::CommandError)
+      expect(cache.get('key')).to eq('original')
+    end
+
     it 'does not commit when the user block raises' do
       cache.set('key', 'original')
       error = Redis::ConnectionError.new('user error')
