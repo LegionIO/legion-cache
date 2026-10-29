@@ -83,12 +83,18 @@ module Legion
         @cluster_mode == true
       end
 
+      def redis_key(key)
+        namespace = redis_settings[:namespace].to_s
+        namespace.empty? ? key.to_s : "#{namespace}:#{key}"
+      end
+
       def get(key)
-        raw = client.with { |conn| conn.get(key) }
+        raw = client.with { |conn| conn.get(redis_key(key)) }
         result = deserialize_value(raw)
         log.debug { "[cache] GET #{key} hit=#{!result.nil?}" }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :warn, handled: true, operation: :redis_get, key: key)
         nil
       end
@@ -103,12 +109,14 @@ module Legion
       end
 
       def set_nx(key, value, ttl: nil)
-        effective_ttl = ttl || default_ttl
+        effective_ttl = redis_ttl(ttl)
         serialized = serialize_value(value)
-        result = client.with { |conn| conn.set(key, serialized, nx: true, ex: effective_ttl) == 'OK' }
+        args = effective_ttl ? { ex: effective_ttl } : {}
+        result = client.with { |conn| conn.set(redis_key(key), serialized, nx: true, **args) == 'OK' }
         log.debug { "[cache] SET_NX #{key} ttl=#{effective_ttl.inspect} result=#{result}" }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :error, handled: false, operation: :redis_set_nx, key: key, ttl: effective_ttl)
         raise
       end
@@ -118,14 +126,15 @@ module Legion
       end
 
       def set_sync(key, value, ttl: nil, **)
-        effective_ttl = ttl || default_ttl
+        effective_ttl = redis_ttl(ttl)
         args = {}
         args[:ex] = effective_ttl unless effective_ttl.nil?
         serialized = serialize_value(value)
-        result = client.with { |conn| conn.set(key, serialized, **args) == 'OK' }
+        result = client.with { |conn| conn.set(redis_key(key), serialized, **args) == 'OK' }
         log.debug { "[cache] SET #{key} ttl=#{effective_ttl.inspect} success=#{result}" }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :error, handled: false, operation: :redis_set_sync, key: key, ttl: effective_ttl)
         raise
       end
@@ -135,25 +144,28 @@ module Legion
       end
 
       def delete_sync(key)
-        result = client.with { |conn| conn.del(key) == 1 }
+        result = client.with { |conn| conn.del(redis_key(key)) == 1 }
         log.debug { "[cache] DELETE #{key} success=#{result}" }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :error, handled: false, operation: :redis_delete_sync, key: key)
         raise
       end
 
       def flush
         result = client.with do |conn|
-          if cluster_mode?
-            cluster_flush(conn)
-          else
-            conn.flushdb == 'OK'
-          end
+          prefix = redis_key('')
+          raise ArgumentError, 'Redis flush requires a namespace' if prefix.empty?
+
+          pattern = prefix.gsub(/[\\*?\[\]]/) { |character| "\\#{character}" }
+          conn.scan_each(match: "#{pattern}*", count: 100) { |key| conn.del(key) }
+          true
         end
         log.debug { '[cache] FLUSH completed' }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :warn, handled: true, operation: :redis_flush)
         nil
       end
@@ -162,18 +174,19 @@ module Legion
         keys = keys.flatten
         return {} if keys.empty?
 
-        result = client.with do |conn|
+        qualified = keys.map { |key| redis_key(key) }
+        values = client.with do |conn|
           if cluster_mode?
-            cluster_mget(conn, keys)
+            cluster_mget(conn, qualified).values_at(*qualified)
           else
-            values = conn.mget(*keys)
-            keys.zip(values).to_h
+            conn.mget(*qualified)
           end
         end
-        result = result.transform_values { |v| deserialize_value(v) }
+        result = keys.zip(values.map { |value| deserialize_value(value) }).to_h
         log.debug { "[cache] MGET keys=#{keys.size}" }
         result
       rescue StandardError => e
+        cache_backend_failed(e)
         handle_exception(e, level: :warn, handled: true, operation: :redis_mget, key_count: keys.size)
         {}
       end
@@ -244,46 +257,17 @@ module Legion
         result
       end
 
-      def cluster_mset(conn, hash)
-        groups = group_keys_by_slot(hash.keys)
-        groups.each_value do |group_keys|
-          pairs = group_keys.flat_map { |k| [k, hash[k]] }
-          conn.mset(*pairs)
-        end
-        true
-      end
-
-      def cluster_flush(conn)
-        node_info = conn.cluster('nodes')
-        primaries = node_info.lines.select { |l| l.include?('master') }.map { |l| l.split[1].split('@').first }
-        primaries.each do |addr|
-          host, port = Legion::Cache::Settings.parse_server_address(addr, default_port: 6379)
-          node = ::Redis.new(host: host, port: port.to_i, **(@connection_opts || {}))
-          node.flushdb
-          node.close
-        end
-        true
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :cluster_flush, fallback: :single_flushdb)
-        conn.flushdb == 'OK'
-      end
-
       def group_keys_by_slot(keys)
-        if defined?(::Redis::Cluster::KeySlotConverter)
-          keys.group_by { |k| ::Redis::Cluster::KeySlotConverter.convert(k) }
-        else
-          { 0 => keys }
-        end
+        keys.group_by { |key| ::RedisClient::Cluster::KeySlotConverter.convert(key) }
       end
 
-      def resolved_redis_address(server:, servers:, cluster:)
-        nodes = Array(cluster).compact
-        return nodes.join(', ') if nodes.any?
+      def redis_ttl(ttl)
+        value = ttl.nil? ? default_ttl : ttl
+        return nil if value.nil?
 
-        Legion::Cache::Settings.resolve_servers(driver: 'redis', server: server, servers: Array(servers)).first
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :resolved_redis_address)
-        'unknown'
+        raise ArgumentError, 'TTL must not be negative' if value.negative?
+
+        value.zero? ? nil : value
       end
 
       def resolve_primary_port(server: nil, servers: [], cluster: nil)

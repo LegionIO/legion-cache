@@ -28,7 +28,7 @@ module Legion
 
         Legion::Cache.pool.with do |conn|
           flat = hash.flat_map { |k, v| [k.to_s, v.to_s] }
-          conn.hset(key, *flat)
+          conn.hset(Legion::Cache.redis_key(key), *flat)
         end
         log.debug "[cache:redis_hash] HSET #{key} fields=#{hash.size}"
         true
@@ -42,7 +42,7 @@ module Legion
         return nil unless redis_available?
 
         result = Legion::Cache.pool.with do |conn|
-          conn.hgetall(key)
+          conn.hgetall(Legion::Cache.redis_key(key))
         end
         log.debug "[cache:redis_hash] HGETALL #{key} fields=#{result.size}"
         result
@@ -56,7 +56,7 @@ module Legion
         return 0 unless redis_available?
 
         result = Legion::Cache.pool.with do |conn|
-          conn.hdel(key, *fields)
+          conn.hdel(Legion::Cache.redis_key(key), *fields)
         end
         log.debug "[cache:redis_hash] HDEL #{key} fields=#{fields.size} removed=#{result}"
         result
@@ -70,7 +70,7 @@ module Legion
         return false unless redis_available?
 
         Legion::Cache.pool.with do |conn|
-          conn.zadd(key, score.to_f, member.to_s)
+          conn.zadd(Legion::Cache.redis_key(key), score.to_f, member.to_s)
         end
         log.debug "[cache:redis_hash] ZADD #{key} member=#{member}"
         true
@@ -88,7 +88,7 @@ module Legion
         opts[:limit] = limit if limit
 
         result = Legion::Cache.pool.with do |conn|
-          conn.zrangebyscore(key, min, max, **opts)
+          conn.zrangebyscore(Legion::Cache.redis_key(key), min, max, **opts)
         end
         log.debug "[cache:redis_hash] ZRANGEBYSCORE #{key} results=#{result.size}"
         result
@@ -102,7 +102,7 @@ module Legion
         return false unless redis_available?
 
         Legion::Cache.pool.with do |conn|
-          conn.zrem(key, member.to_s)
+          conn.zrem(Legion::Cache.redis_key(key), member.to_s)
         end
         log.debug "[cache:redis_hash] ZREM #{key} member=#{member}"
         true
@@ -113,19 +113,22 @@ module Legion
 
       # Set a TTL (in seconds) on a key.
       def expire(key, seconds)
+        raise ArgumentError, 'TTL must not be negative' if seconds.negative?
         return false unless redis_available?
 
-        result = Legion::Cache.pool.with do |conn|
-          conn.expire(key, seconds.to_i) == 1
+        begin
+          Legion::Cache.pool.with do |conn|
+            qualified = Legion::Cache.redis_key(key)
+            seconds.zero? ? conn.persist(qualified) : conn.expire(qualified, seconds)
+          end
+        rescue StandardError => e
+          log_redis_error('expire', e)
+          false
         end
-        log.debug "[cache:redis_hash] EXPIRE #{key} seconds=#{seconds} success=#{result}"
-        result
-      rescue StandardError => e
-        log_redis_error('expire', e)
-        false
       end
 
       def log_redis_error(method, error)
+        Legion::Cache.send(:cache_backend_failed, error)
         handle_exception(error, level: :warn, handled: true, operation: method)
       end
     end
