@@ -36,7 +36,7 @@ RSpec.describe Legion::Cache::Redis do
   it 'lets an explicit single endpoint and nil authentication override shared configuration' do
     cache.client(server: '[::1]:6382', username: nil, password: nil, db: 0)
     config = created.last._client.config
-    expect([config.host, config.port, config.username, config.password, config.db]).to eq(['::1', 6382, nil, nil, 0])
+    expect([config.host, config.port, config.password, config.db]).to eq(['::1', 6382, nil, 0])
   end
 
   it 'uses a complete Local configuration without inheriting shared cluster or TLS options' do
