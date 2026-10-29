@@ -136,6 +136,49 @@ RSpec.describe Legion::Cache::Memory do
       expect(described_class.get('k0')).to eq(0)
     end
   end
+
+  describe 'PHI retention' do
+    before do
+      allow(Legion::Settings).to receive(:dig).with(:cache, :compliance, :phi_max_ttl).and_return(0.5)
+    end
+
+    it 'enforces a positive bounded TTL across every write entrypoint' do
+      store = described_class.instance_variable_get(:@store)
+      allow(store).to receive(:monotonic_now).and_return(0)
+      described_class.set('set', 'phi', phi: true)
+      described_class.set_sync('sync', 'phi', ttl: 0, phi: true)
+      described_class.set_nx('nx', 'phi', ttl: -1, phi: true)
+      described_class.mset({ 'batch' => 'phi' }, ttl: 50, phi: true)
+      described_class.mset_sync({ 'batch_sync' => 'phi' }, ttl: nil, phi: true)
+      described_class.fetch('fetch', ttl: 0, phi: true) { 'phi' }
+      keys = %w[set sync nx batch batch_sync fetch]
+      expect(described_class.mget(keys).values).to eq(Array.new(keys.length, 'phi'))
+
+      allow(store).to receive(:monotonic_now).and_return(0.5)
+      expect(described_class.mget(keys).values).to eq(Array.new(keys.length))
+    end
+
+    it 'keeps a requested TTL shorter than the cap' do
+      store = described_class.instance_variable_get(:@store)
+      allow(store).to receive(:monotonic_now).and_return(0)
+      described_class.set('short', 'phi', ttl: 0.1, phi: true)
+
+      allow(store).to receive(:monotonic_now).and_return(0.1)
+      expect(described_class.get('short')).to be_nil
+    end
+
+    it 'rejects a nonpositive configured cap instead of retaining PHI indefinitely' do
+      allow(Legion::Settings).to receive(:dig).with(:cache, :compliance, :phi_max_ttl).and_return(0)
+
+      expect { described_class.set('invalid', 'phi', phi: true) }.to raise_error(ArgumentError)
+      expect(described_class.get('invalid')).to be_nil
+    end
+
+    it 'rejects a nonfinite PHI TTL' do
+      expect { described_class.set_nx('invalid', 'phi', ttl: Float::INFINITY, phi: true) }.to raise_error(ArgumentError)
+      expect(described_class.get('invalid')).to be_nil
+    end
+  end
 end
 
 RSpec.describe Legion::Cache::ExpiringStore do

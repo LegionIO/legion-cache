@@ -208,23 +208,22 @@ module Legion
         set_sync(key, value, ttl: ttl, phi: phi)
       end
 
-      def set_nx(key, value, ttl: nil)
+      def set_nx(key, value, ttl: nil, phi: false)
+        ttl = enforce_phi_ttl(ttl) if phi
         result = @store.set(key, value, ttl: ttl, unless_exist: true)
         log.debug { "[cache:memory] SET_NX #{key} ttl=#{ttl.inspect} result=#{result}" }
         result
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :memory_set_nx)
-        false
       end
 
       def set_sync(key, value, ttl: nil, phi: false)
-        ttl = enforce_phi_ttl(ttl, phi: phi) if phi
+        ttl = enforce_phi_ttl(ttl) if phi
         @store.set(key, value, ttl: ttl)
         log.debug { "[cache:memory] SET #{key} ttl=#{ttl.inspect}" }
         true
       end
 
-      def fetch(key, ttl: nil, &block)
+      def fetch(key, ttl: nil, phi: false, &block)
+        ttl = enforce_phi_ttl(ttl) if phi
         val = get(key)
         return val unless val.nil?
 
@@ -255,12 +254,12 @@ module Legion
         {}
       end
 
-      def mset(hash, ttl: nil, async: true) # rubocop:disable Lint/UnusedMethodArgument
-        mset_sync(hash, ttl: ttl)
+      def mset(hash, ttl: nil, async: true, phi: false) # rubocop:disable Lint/UnusedMethodArgument
+        mset_sync(hash, ttl: ttl, phi: phi)
       end
 
       def mset_sync(hash, ttl: nil, phi: false)
-        ttl = enforce_phi_ttl(ttl, phi: phi) if phi
+        ttl = enforce_phi_ttl(ttl) if phi
         @store.mset(hash, ttl: ttl)
       end
 
@@ -301,16 +300,20 @@ module Legion
 
       private
 
-      def enforce_phi_ttl(ttl, phi: false)
-        return ttl unless phi
-
+      def enforce_phi_ttl(ttl)
         max = if defined?(Legion::Settings)
-                Legion::Settings.dig(:cache, :compliance, :phi_max_ttl) || 3600
+                Legion::Settings.dig(:cache, :compliance, :phi_max_ttl)
               else
                 3600
               end
-        result = ttl.nil? ? max : [ttl, max].min
-        [result, 1].max
+        max = 3600 if max.nil?
+        unless max.is_a?(Numeric) && max.real? && max.finite? && max.positive?
+          raise ArgumentError, 'phi_max_ttl must be a finite positive number'
+        end
+        return max if ttl.nil?
+        raise ArgumentError, 'ttl must be a finite number' unless ttl.is_a?(Numeric) && ttl.real? && ttl.finite?
+
+        ttl.positive? ? [ttl, max].min : max
       end
     end
   end
