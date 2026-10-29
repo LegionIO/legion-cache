@@ -100,11 +100,16 @@ module Legion
       end
 
       def fetch(key, ttl: nil)
+        redis_ttl(ttl)
         result = get(key)
         return result unless result.nil? && block_given?
 
         result = yield
-        set(key, result, ttl: ttl)
+        begin
+          set(key, result, ttl: ttl)
+        rescue StandardError => e
+          handle_exception(e, level: :warn, handled: true, operation: :redis_fetch_store, key: key)
+        end
         result
       end
 
@@ -136,6 +141,36 @@ module Legion
       rescue StandardError => e
         cache_backend_failed(e)
         handle_exception(e, level: :error, handled: false, operation: :redis_set_sync, key: key, ttl: effective_ttl)
+        raise
+      end
+
+      def cas(key, ttl: nil)
+        effective_ttl = redis_ttl(ttl)
+        args = effective_ttl ? { ex: effective_ttl } : {}
+        qualified = redis_key(key)
+        user_error = nil
+        client.with do |conn|
+          loop do
+            value = nil
+            committed = conn.watch(qualified) do |watched|
+              current = deserialize_value(watched.get(qualified))
+              begin
+                value = yield current
+              rescue StandardError => e
+                user_error = e
+                raise
+              end
+              serialized = serialize_value(value)
+              watched.multi { |transaction| transaction.set(qualified, serialized, **args) }
+            end
+            return value unless committed.nil?
+          end
+        end
+      rescue StandardError => e
+        raise if e.equal?(user_error)
+
+        cache_backend_failed(e)
+        handle_exception(e, level: :error, handled: false, operation: :redis_cas, key: key)
         raise
       end
 
