@@ -136,12 +136,18 @@ module Legion
         mset_sync(hash, ttl: ttl)
       end
 
-      def mset_sync(hash, ttl: nil, **) # rubocop:disable Lint/UnusedMethodArgument
+      def mset_sync(hash, ttl: nil, **)
         return true if hash.empty?
 
-        client.with { |conn| conn.set_multi(hash) }
-        log.debug { "[cache] MSET keys=#{hash.size}" }
-        true
+        effective_ttl = ttl || default_ttl
+        # Dalli 3 has no set_multi; newer quiet batches do not acknowledge each write.
+        result = client.with do |conn|
+          success = true
+          hash.each { |key, value| success = false unless conn.set(key, value, effective_ttl) }
+          success
+        end
+        log.debug { "[cache] MSET keys=#{hash.size} success=#{result}" }
+        result
       rescue StandardError => e
         handle_exception(e, level: :error, handled: false, operation: :memcached_mset_sync, key_count: hash.size)
         raise

@@ -56,6 +56,51 @@ RSpec.describe Legion::Cache::Memcached do
       expect(cache.set('key', 'value')).to be(false)
     end
   end
+
+  describe '#mset' do
+    it 'reports rejection while still writing remaining keys' do
+      stored = {}
+      allow(dalli).to receive(:set) do |key, value, _ttl|
+        next false if key == 'rejected'
+
+        stored[key] = value
+        42
+      end
+
+      expect(cache.mset({ 'rejected' => 1, 'accepted' => 2 })).to be(false)
+      expect(stored).to eq('accepted' => 2)
+    end
+
+    it 'expires all entries using the requested TTL' do
+      expires = {}
+      now = 0
+      allow(dalli).to receive(:set) do |key, _value, ttl|
+        expires[key] = now + ttl
+        42
+      end
+      allow(dalli).to receive(:get) { |key| 'cached' if expires[key] && now < expires[key] }
+
+      expect(cache.mset({ 'first' => 1, 'second' => 2 }, ttl: 10)).to be(true)
+      now = 9
+      expect(cache.get('first')).to eq('cached')
+      now = 10
+      expect(cache.get('first')).to be_nil
+      expect(cache.get('second')).to be_nil
+    end
+
+    it 'uses the configured default TTL when none is supplied' do
+      allow(Legion::Settings).to receive(:dig).with(:cache, :default_ttl).and_return(20)
+      expires = nil
+      now = 19
+      allow(dalli).to receive(:set) { |_key, _value, ttl| expires = ttl }
+      allow(dalli).to receive(:get) { |_key| 'cached' if expires && now < expires }
+
+      expect(cache.mset({ 'key' => 1 })).to be(true)
+      expect(cache.get('key')).to eq('cached')
+      now = 20
+      expect(cache.get('key')).to be_nil
+    end
+  end
 end
 
 RSpec.describe Legion::Cache::Memcached, :integration do
