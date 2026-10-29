@@ -45,6 +45,15 @@ module Legion
         true
       end
 
+      def cas(key, ttl: nil)
+        @mutex.synchronize do
+          expire_key(key)
+          value = yield @entries[key]
+          write_entry(key, value, expiry_deadline(ttl))
+          value
+        end
+      end
+
       def mget(keys)
         @mutex.synchronize do
           keys.to_h do |key|
@@ -220,6 +229,13 @@ module Legion
         @store.set(key, value, ttl: ttl)
         log.debug { "[cache:memory] SET #{key} ttl=#{ttl.inspect}" }
         true
+      end
+
+      def cas(key, ttl: nil, phi: false, &block)
+        ttl = enforce_phi_ttl(ttl) if phi
+        value = @store.cas(key, ttl: ttl, &block)
+        log.debug { "[cache:memory] CAS #{key} ttl=#{ttl.inspect}" }
+        value
       end
 
       def fetch(key, ttl: nil, phi: false, &block)

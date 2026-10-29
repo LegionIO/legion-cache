@@ -123,17 +123,41 @@ RSpec.describe Legion::Cache::Memory do
   end
 
 
-  describe 'thread safety' do
-    it 'handles concurrent reads and writes' do
-      described_class.setup
-      threads = 20.times.map do |i|
+  describe '.cas' do
+    it 'serializes concurrent read-modify-write operations without lost updates' do
+      threads = 8.times.map do
         Thread.new do
-          described_class.set("k#{i}", i)
-          described_class.get("k#{i}")
+          25.times do
+            described_class.cas('counter') do |current|
+              Thread.pass
+              (current || 0) + 1
+            end
+          end
         end
       end
-      threads.each(&:join)
-      expect(described_class.get('k0')).to eq(0)
+      threads.each(&:value)
+
+      expect(described_class.get('counter')).to eq(200)
+    end
+
+    it 'returns the committed value and treats expired entries as absent' do
+      store = described_class.instance_variable_get(:@store)
+      allow(store).to receive(:monotonic_now).and_return(0)
+      described_class.set('value', 10, ttl: 1)
+      allow(store).to receive(:monotonic_now).and_return(1)
+
+      expect(described_class.cas('value', ttl: 2) { |current| (current || 0) + 1 }).to eq(1)
+      expect(described_class.get('value')).to eq(1)
+      allow(store).to receive(:monotonic_now).and_return(3)
+      expect(described_class.get('value')).to be_nil
+    end
+
+    it 'propagates application errors without committing a replacement' do
+      described_class.set('value', 10)
+
+      expect { described_class.cas('value') { raise ArgumentError, 'invalid update' } }
+        .to raise_error(ArgumentError, 'invalid update')
+      expect(described_class.get('value')).to eq(10)
     end
   end
 
@@ -151,7 +175,8 @@ RSpec.describe Legion::Cache::Memory do
       described_class.mset({ 'batch' => 'phi' }, ttl: 50, phi: true)
       described_class.mset_sync({ 'batch_sync' => 'phi' }, ttl: nil, phi: true)
       described_class.fetch('fetch', ttl: 0, phi: true) { 'phi' }
-      keys = %w[set sync nx batch batch_sync fetch]
+      described_class.cas('cas', ttl: 0, phi: true) { 'phi' }
+      keys = %w[set sync nx batch batch_sync fetch cas]
       expect(described_class.mget(keys).values).to eq(Array.new(keys.length, 'phi'))
 
       allow(store).to receive(:monotonic_now).and_return(0.5)
