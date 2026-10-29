@@ -273,8 +273,8 @@ module Legion
       def mset_sync(hash, ttl: nil, **)
         return true if hash.empty?
         return hash.each { |key, value| Legion::Cache::Memory.set_sync(key, value, ttl: ttl) } && true if using_memory?
-        return Legion::Cache::Local.mset(hash, ttl: ttl) if using_local?
-        return Legion::Cache::Local.mset(hash, ttl: ttl) if failback_to_local?
+        return Legion::Cache::Local.mset(hash, ttl: ttl, async: false) if using_local?
+        return Legion::Cache::Local.mset(hash, ttl: ttl, async: false) if failback_to_local?
 
         configure_shared_adapter!
         super
@@ -356,8 +356,8 @@ module Legion
 
       def set_internal(key, value, ttl: nil)
         return Legion::Cache::Memory.set(key, value, ttl: ttl) if using_memory?
-        return Legion::Cache::Local.set(key, value, ttl: ttl) if using_local?
-        return Legion::Cache::Local.set(key, value, ttl: ttl) if failback_to_local?
+        return Legion::Cache::Local.set(key, value, ttl: ttl, async: false) if using_local?
+        return Legion::Cache::Local.set(key, value, ttl: ttl, async: false) if failback_to_local?
 
         configure_shared_adapter!
         set_sync(key, value, ttl: ttl)
@@ -365,8 +365,8 @@ module Legion
 
       def delete_internal(key)
         return Legion::Cache::Memory.delete(key) if using_memory?
-        return Legion::Cache::Local.delete(key) if using_local?
-        return Legion::Cache::Local.delete(key) if failback_to_local?
+        return Legion::Cache::Local.delete(key, async: false) if using_local?
+        return Legion::Cache::Local.delete(key, async: false) if failback_to_local?
 
         configure_shared_adapter!
         delete_sync(key)
@@ -374,8 +374,8 @@ module Legion
 
       def mset_internal(hash, ttl: nil)
         return hash.each { |key, value| Legion::Cache::Memory.set(key, value, ttl: ttl) } && true if using_memory?
-        return Legion::Cache::Local.mset(hash, ttl: ttl) if using_local?
-        return Legion::Cache::Local.mset(hash, ttl: ttl) if failback_to_local?
+        return Legion::Cache::Local.mset(hash, ttl: ttl, async: false) if using_local?
+        return Legion::Cache::Local.mset(hash, ttl: ttl, async: false) if failback_to_local?
 
         configure_shared_adapter!
         mset_sync(hash, ttl: ttl)

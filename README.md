@@ -2,7 +2,7 @@
 
 Caching wrapper for the [LegionIO](https://github.com/LegionIO/LegionIO) framework. Provides a consistent interface for Memcached (via `dalli`) and Redis (via `redis` gem) with connection pooling. Driver selection is config-driven.
 
-**Version**: 1.3.17
+**Version**: 1.4.3
 
 ## Installation
 
@@ -66,12 +66,22 @@ Legion::Cache.local          # => Legion::Cache::Local
 
 # Use Local directly if needed
 Legion::Cache::Local.setup
-Legion::Cache::Local.set('key', 'value', 60)
+Legion::Cache::Local.set('key', 'value', ttl: 60, async: false)
 Legion::Cache::Local.get('key')  # => 'value'
 Legion::Cache::Local.shutdown
 ```
 
 Local uses a separate namespace (`legion_local`) and independent connection pool (pool_size: 5, timeout: 3) so it never collides with the shared tier.
+
+Local `set`, `delete`, and `mset` accept `async:` (default `true`). After setup,
+asynchronous mutations use a dedicated Local writer; pass `async: false` when a
+following read must see the mutation immediately. `set_sync`, `delete_sync`, and
+`mset_sync` are always synchronous. Shared-cache fallback does not enqueue the
+same mutation a second time.
+
+Local shutdown, close, restart, and reset drain pending mutations before
+releasing the driver, up to the configured shutdown timeout. The Local writer
+uses the same bounded queue and caller-runs overload policy as the shared writer.
 
 ## Configuration
 
@@ -125,7 +135,12 @@ Both `server` (singular string) and `servers` (array) are accepted and merged. D
   "servers": ["127.0.0.1:11211"],
   "namespace": "legion_local",
   "pool_size": 5,
-  "timeout": 3
+  "timeout": 3,
+  "async": {
+    "pool_size": 4,
+    "queue_size": 1000,
+    "shutdown_timeout": 5
+  }
 }
 ```
 

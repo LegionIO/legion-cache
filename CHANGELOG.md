@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.4.3] - 2026-10-29
+
+### Fixed
+- Local cache `set`, `delete`, and `mset` now honor `async: true` using a dedicated, locally configured AsyncWriter.
+- Drain Local async mutations before closing, restarting, or resetting the local pool; preserve synchronous facade fallback writes without double-enqueueing.
+
 ## [1.4.1] - 2026-04-06
 
 ### Fixed

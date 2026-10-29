@@ -3,11 +3,13 @@
 require 'concurrent'
 require 'legion/logging/helper'
 require 'legion/cache/settings'
+require 'legion/cache/async_writer'
 
 module Legion
   module Cache
     module Local
       @connected = Concurrent::AtomicBoolean.new(false)
+      @async_writer = Legion::Cache::AsyncWriter.new(settings_key: :cache_local)
 
       class << self
         include Legion::Logging::Helper
@@ -23,6 +25,7 @@ module Legion
           @driver_name = Legion::Cache::Settings.normalize_driver(driver_name)
           @driver = build_driver(driver_name)
           @driver.client(**settings, logger: log, **)
+          @async_writer.start
           @connected.make_true
           servers = Array(settings[:servers]).join(', ')
           log.info "Legion::Cache::Local connected (#{driver_name}) to #{servers}"
@@ -35,6 +38,7 @@ module Legion
           return unless @connected
 
           log.info 'Shutting down Legion::Cache::Local'
+          @async_writer.stop
           @driver&.close
           @driver = nil
           @driver_name = nil
@@ -67,8 +71,13 @@ module Legion
           nil
         end
 
-        def set(key, value, ttl: nil, **)
-          set_sync(key, value, ttl: ttl, **)
+        def set(key, value, ttl: nil, async: true, **)
+          if async && @async_writer.running?
+            @async_writer.enqueue { set_sync(key, value, ttl: ttl, **) }
+            true
+          else
+            set_sync(key, value, ttl: ttl, **)
+          end
         end
 
         def set_sync(key, value, ttl: nil, **)
@@ -90,8 +99,13 @@ module Legion
           nil
         end
 
-        def delete(key, **)
-          delete_sync(key)
+        def delete(key, async: true, **)
+          if async && @async_writer.running?
+            @async_writer.enqueue { delete_sync(key) }
+            true
+          else
+            delete_sync(key)
+          end
         end
 
         def delete_sync(key)
@@ -119,10 +133,21 @@ module Legion
           keys.to_h { |key| [key, get(key)] }
         end
 
-        def mset(hash, ttl: nil, **)
+        def mset(hash, ttl: nil, async: true, **)
           return true if hash.empty?
 
-          hash.each { |key, value| set(key, value, ttl: ttl) }
+          if async && @async_writer.running?
+            @async_writer.enqueue { mset_sync(hash, ttl: ttl) }
+            true
+          else
+            mset_sync(hash, ttl: ttl)
+          end
+        end
+
+        def mset_sync(hash, ttl: nil, **)
+          return true if hash.empty?
+
+          hash.each { |key, value| set_sync(key, value, ttl: ttl) }
           true
         end
 
@@ -143,6 +168,7 @@ module Legion
         end
 
         def close
+          @async_writer.stop
           @driver&.close
           @driver = nil
           @driver_name = nil
@@ -153,7 +179,9 @@ module Legion
 
         def restart(**opts)
           settings = local_settings
+          @async_writer.stop
           @driver&.restart(**settings.merge(opts, logger: log))
+          @async_writer.start
           @connected.make_true
           log.info 'Legion::Cache::Local pool restarted'
           @connected
@@ -176,6 +204,7 @@ module Legion
         end
 
         def reset!
+          @async_writer.stop
           @driver = nil
           @driver_name = nil
           @connected.make_false

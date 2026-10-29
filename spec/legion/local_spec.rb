@@ -71,21 +71,78 @@ RSpec.describe Legion::Cache::Local do
     end
   end
 
-  describe 'method signatures' do
-    it 'responds to enabled?' do
-      expect(described_class).to respond_to(:enabled?)
+  describe 'asynchronous mutations' do
+    let(:entered) { Queue.new }
+    let(:release) { Queue.new }
+    let(:returned) { Queue.new }
+    let(:memory) { Legion::Cache::Memory }
+
+    before do
+      described_class.reset!
+      memory.reset!
+      allow(described_class).to receive(:build_driver).and_return(memory)
+      allow(described_class).to receive(:local_settings).and_return(
+        Legion::Cache::Settings.local.merge(async: { pool_size: 1, queue_size: 10 })
+      )
+      described_class.setup
     end
 
-    it 'set accepts keyword ttl' do
-      driver = double('driver')
-      allow(driver).to receive(:set_sync)
-      described_class.instance_variable_set(:@driver, driver)
-      described_class.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(true))
-      expect { described_class.set('k', 'v', ttl: 120) }.not_to raise_error
+    after do
+      release << true
+      @caller&.join(2)
+      described_class.shutdown
+      memory.reset!
     end
 
-    it 'flush takes no arguments' do
-      expect(described_class.method(:flush).arity).to eq(0)
+    {
+      set:    [:set_sync, %w[key updated], 'updated'],
+      delete: [:delete_sync, ['key'], nil],
+      mset:   [:set_sync, [{ 'key' => 'updated' }], 'updated']
+    }.each do |operation, (driver_method, arguments, expected)|
+      it "returns before a blocked #{operation} finishes and drains it before shutdown" do
+        memory.set_sync('key', 'original')
+        allow(memory).to receive(driver_method).and_wrap_original do |method, *args, **opts|
+          entered << Thread.current
+          release.pop
+          method.call(*args, **opts)
+        end
+
+        @caller = Thread.new { returned << described_class.public_send(operation, *arguments, async: true) }
+        worker = entered.pop(timeout: 2)
+
+        expect(returned.pop(timeout: 2)).to be(true)
+        expect(worker).not_to eq(@caller)
+        expect(described_class.get('key')).to eq('original')
+
+        release << true
+        described_class.shutdown
+
+        expect(memory.get('key')).to eq(expected)
+      end
+    end
+
+    it 'keeps explicit synchronous mutations immediately visible through the fallback facade' do
+      allow(Legion::Cache).to receive(:using_local?).and_return(true)
+      allow(Legion::Cache).to receive(:using_memory?).and_return(false)
+
+      Legion::Cache.set('key', 'value', async: false)
+      expect(described_class.get('key')).to eq('value')
+
+      Legion::Cache.mset({ 'key' => 'updated', 'other' => 'batch' }, async: false)
+      expect(described_class.mget('key', 'other')).to eq('key' => 'updated', 'other' => 'batch')
+
+      Legion::Cache.delete('key', async: false)
+      expect(described_class.get('key')).to be_nil
+    end
+
+    it 'propagates synchronous failures but handles background failures before draining' do
+      allow(memory).to receive(:set_sync).and_raise(IOError, 'write failed')
+
+      expect { described_class.set('key', 'value', async: false) }.to raise_error(IOError, 'write failed')
+      expect(described_class.set('key', 'value', async: true)).to be(true)
+      described_class.shutdown
+
+      expect(memory.get('key')).to be_nil
     end
   end
 
@@ -113,23 +170,23 @@ RSpec.describe 'Legion::Cache::Local integration', :integration do
   end
 
   it 'can set and get' do
-    expect(Legion::Cache::Local.set('local_test', 'hello')).to eq true
+    expect(Legion::Cache::Local.set('local_test', 'hello', async: false)).to eq true
     expect(Legion::Cache::Local.get('local_test')).to eq 'hello'
   end
 
   it 'can set with TTL' do
-    expect(Legion::Cache::Local.set('local_ttl', 'expires', 10)).to eq true
+    expect(Legion::Cache::Local.set('local_ttl', 'expires', ttl: 10, async: false)).to eq true
     expect(Legion::Cache::Local.get('local_ttl')).to eq 'expires'
   end
 
   it 'can delete' do
-    Legion::Cache::Local.set('local_del', 'gone')
-    expect(Legion::Cache::Local.delete('local_del')).to eq true
+    Legion::Cache::Local.set('local_del', 'gone', async: false)
+    expect(Legion::Cache::Local.delete('local_del', async: false)).to eq true
     expect(Legion::Cache::Local.get('local_del')).to be_nil
   end
 
   it 'can flush' do
-    Legion::Cache::Local.set('local_flush', 'bye')
+    Legion::Cache::Local.set('local_flush', 'bye', async: false)
     expect(Legion::Cache::Local.flush).to eq true
   end
 
@@ -153,14 +210,14 @@ RSpec.describe 'Legion::Cache::Local integration', :integration do
   it 'can restart with new values' do
     Legion::Cache::Local.restart(pool_size: 2, timeout: 1)
     expect(Legion::Cache::Local.connected?).to eq true
-    expect(Legion::Cache::Local.set('restart_test', 'works')).to eq true
+    expect(Legion::Cache::Local.set('restart_test', 'works', async: false)).to eq true
     expect(Legion::Cache::Local.get('restart_test')).to eq 'works'
   end
 
   it 'uses separate namespace from shared cache' do
-    Legion::Cache::Local.set('ns_test', 'local_value')
+    Legion::Cache::Local.set('ns_test', 'local_value', async: false)
     Legion::Cache.setup
-    Legion::Cache.set('ns_test', 'shared_value')
+    Legion::Cache.set('ns_test', 'shared_value', async: false)
     expect(Legion::Cache::Local.get('ns_test')).to eq 'local_value'
     expect(Legion::Cache.get('ns_test')).to eq 'shared_value'
     Legion::Cache.shutdown
