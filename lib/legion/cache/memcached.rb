@@ -61,19 +61,17 @@ module Legion
         nil
       end
 
-      def fetch(key, ttl: nil, &)
-        result = client.with do |conn|
-          if block_given?
-            conn.fetch(key, ttl, &)
-          else
-            conn.fetch(key, ttl)
-          end
+      def fetch(key, ttl: nil)
+        result = get(key)
+        return result unless result.nil? && block_given?
+
+        result = yield
+        begin
+          set_nx(key, result, ttl: ttl)
+        rescue StandardError => e
+          handle_exception(e, level: :warn, handled: true, operation: :memcached_fetch, key: key, ttl: ttl)
         end
-        log.debug { "[cache] FETCH #{key} hit=#{!result.nil?}" }
         result
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :memcached_fetch, key: key, ttl: ttl)
-        nil
       end
 
       def set_nx(key, value, ttl: nil)

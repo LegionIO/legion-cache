@@ -4,26 +4,39 @@ require 'spec_helper'
 require 'legion/cache/memcached'
 
 RSpec.describe Legion::Cache::Memcached do
-  describe 'method signatures' do
-    it 'set accepts keyword ttl' do
-      cache = described_class.dup
-      pool = instance_double(ConnectionPool)
-      cache.instance_variable_set(:@client, pool)
-      cache.instance_variable_set(:@connected, true)
+  let(:cache) { described_class.dup }
+  let(:dalli) { instance_double(Dalli::Client) }
+  let(:pool) { ConnectionPool.new(size: 1, timeout: 0.05) { dalli } }
 
-      dalli = instance_double(Dalli::Client)
-      allow(pool).to receive(:with).and_yield(dalli)
-      allow(dalli).to receive(:set).and_return(1)
+  before { cache.instance_variable_set(:@client, pool) }
 
-      expect { cache.set('k', 'v', ttl: 120) }.not_to raise_error
+  describe '#fetch' do
+    it 'releases the only connection before computing a nested cache miss' do
+      allow(dalli).to receive(:get).with('outer').and_return(nil)
+      allow(dalli).to receive(:get).with('inner').and_return('nested')
+      allow(dalli).to receive(:add).and_return(42)
+
+      expect(cache.fetch('outer') { cache.get('inner') }).to eq('nested')
     end
 
-    it 'flush takes no arguments' do
-      expect(described_class.method(:flush).arity).to eq(0)
+    it 'returns cached false without evaluating the caller block' do
+      allow(dalli).to receive(:get).and_return(false)
+
+      expect(cache.fetch('flag') { raise 'should not execute' }).to be(false)
     end
 
-    it 'uses log instead of cache_logger' do
-      expect(described_class.private_method_defined?(:cache_logger)).to be(false)
+    it 'propagates application errors unchanged' do
+      allow(dalli).to receive(:get).and_return(nil)
+      error = IOError.new('application failure')
+
+      expect { cache.fetch('key') { raise error } }.to raise_error { |raised| expect(raised).to equal(error) }
+    end
+
+    it 'returns the computed value when the backend write fails' do
+      allow(dalli).to receive(:get).and_return(nil)
+      allow(dalli).to receive(:add).and_raise(Dalli::RingError, 'offline')
+
+      expect(cache.fetch('key') { 'computed' }).to eq('computed')
     end
   end
 end
