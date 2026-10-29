@@ -7,6 +7,25 @@
 ### Fixed
 - Local cache `set`, `delete`, and `mset` now honor `async: true` using a dedicated, locally configured AsyncWriter.
 - Drain Local async mutations before closing, restarting, or resetting the local pool; preserve synchronous facade fallback writes without double-enqueueing.
+- Reject saturated/stopped async writes without running backend work on the caller; preserve admission order for each key while allowing independent keys to proceed.
+- Interrupt reconnect backoff and stop/join in-flight workers before returning from shutdown; honor `reconnect.enabled`.
+- Preserve atomic connection-state flags across setup, restart, backend failure, fallback, and recovery.
+- Health-check Memcached and Redis before reporting connected; retry failed shared operations against healthy Local and reconnect shared in the background.
+- Rebuild Local after close/reset, honor disabled-cache guards, and preserve explicit endpoint/auth/database configuration on lazy connections and restart.
+- Release Memcached pool checkouts before executing fetch blocks; propagate application exceptions across every fetch path.
+- Preserve computed method results when global-cache writes fail; isolate authenticated caller keys and anonymous method-cache owners.
+- Normalize Memcached insert-if-absent results, preserve batch TTLs, and acknowledge each batch write.
+- Use atomic, bounded CAS for emulated hash updates/deletes to prevent concurrent field loss.
+- Enforce finite positive PHI retention across synchronous/asynchronous writes, batches, insert-if-absent, and CAS.
+- Bound Memory and method-cache fallback storage and reclaim inactive expired entries with managed cleanup workers.
+- Construct Redis Cluster with the supported clustering client; forward TLS and hostname verification to discovered nodes.
+- Apply Redis namespaces to scalar, batch, hash, and sorted-set operations; namespace-only flush reports partial failures without global fallback.
+- Correct README keyword-TTL examples and document admission, ordering, fallback, expiry, and namespace-upgrade behavior.
+
+### Changed
+- Require Redis/redis-clustering versions >= 5.4.1 and < 7.0; keep Dalli below 5.0 to retain binary-protocol SASL authentication.
+- Redis namespace enforcement intentionally produces a cold cache for old unprefixed entries; no legacy-key fallback is used.
+- Memory and method-cache fallback default to 10,000 entries with oldest-entry eviction; ordinary zero TTL means no expiration until eviction or clear.
 
 ## [1.4.1] - 2026-04-06
 
