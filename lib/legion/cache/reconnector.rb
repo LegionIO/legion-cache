@@ -27,6 +27,8 @@ module Legion
       end
 
       def start
+        return unless configured_enabled?
+
         @mutex.synchronize do
           return if @stopping || running?
 
@@ -77,7 +79,7 @@ module Legion
         delay = configured_initial_delay
 
         until @stop_signal.true?
-          unless @enabled_block.call
+          unless configured_enabled? && @enabled_block.call
             wait_for_retry(1)
             next
           end
@@ -85,6 +87,7 @@ module Legion
           begin
             @next_retry_at = Time.now + delay
             return unless wait_for_retry(delay)
+            next unless configured_enabled? && @enabled_block.call
 
             @connect_block.call
             count = @attempts.value
@@ -117,6 +120,13 @@ module Legion
           end
         end
         false
+      end
+
+      def configured_enabled?
+        return true unless defined?(Legion::Settings)
+
+        Legion::Settings.dig(@settings_key, :enabled) != false &&
+          Legion::Settings.dig(@settings_key, :reconnect, :enabled) != false
       end
 
       def configured_initial_delay

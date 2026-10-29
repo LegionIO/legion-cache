@@ -16,6 +16,8 @@ RSpec.describe Legion::Cache::Reconnector do
 
   before do
     allow(Legion::Settings).to receive(:dig).and_call_original
+    allow(Legion::Settings).to receive(:dig).with(:cache, :enabled).and_return(true)
+    allow(Legion::Settings).to receive(:dig).with(:cache, :reconnect, :enabled).and_return(true)
     allow(Legion::Settings).to receive(:dig).with(:cache, :reconnect, :initial_delay).and_return(initial_delay)
     allow(Legion::Settings).to receive(:dig).with(:cache, :reconnect, :max_delay).and_return(60)
     stub_const('Legion::Cache::Reconnector::STOP_TIMEOUT', 0.1)
@@ -156,6 +158,52 @@ RSpec.describe Legion::Cache::Reconnector do
       expect(reconnector.attempts).to eq(0)
       expect(reconnector.next_retry_at).to be_nil
       expect(connect_called.value).to eq(3)
+    end
+  end
+
+  describe 'reconnect configuration' do
+    let(:initial_delay) { 0 }
+    let(:entered) { Queue.new }
+    let(:connect_block) { -> { connect_called.increment; entered << Thread.current } }
+
+    it 'does not start when cache.reconnect.enabled is false, and can start after enabling it' do
+      allow(Legion::Settings).to receive(:dig).with(:cache, :reconnect, :enabled).and_return(false)
+      reconnector.start
+      expect(reconnector.running?).to be(false)
+      expect(connect_called.value).to eq(0)
+
+      allow(Legion::Settings).to receive(:dig).with(:cache, :reconnect, :enabled).and_return(true)
+      reconnector.start
+      worker = entered.pop(timeout: 2)
+      expect(worker.join(2)).to equal(worker)
+      expect(connect_called.value).to eq(1)
+    end
+
+    it 'does not start when cache.enabled is false even if the enabled callback permits it' do
+      allow(Legion::Settings).to receive(:dig).with(:cache, :enabled).and_return(false)
+      reconnector.start
+      expect(reconnector.running?).to be(false)
+      expect(connect_called.value).to eq(0)
+    end
+
+    context 'when reconnect is disabled during backoff' do
+      let(:initial_delay) { 0.05 }
+
+      it 'rechecks the policy before calling the connection callback' do
+        enabled = Concurrent::AtomicBoolean.new(true)
+        checked_disabled = Queue.new
+        allow(Legion::Settings).to receive(:dig).with(:cache, :reconnect, :enabled) do
+          value = enabled.true?
+          checked_disabled << true unless value
+          value
+        end
+        reconnector.start
+        wait_until { reconnector.next_retry_at }
+        enabled.make_false
+        expect(checked_disabled.pop(timeout: 2)).to be(true)
+        reconnector.stop
+        expect(connect_called.value).to eq(0)
+      end
     end
   end
 
