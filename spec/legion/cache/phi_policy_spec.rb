@@ -3,62 +3,62 @@
 require 'spec_helper'
 require 'legion/cache'
 
-RSpec.describe 'Legion::Cache PHI TTL policy' do
+RSpec.describe 'PHI retention on public write routes' do
   before do
-    allow(Legion::Settings).to receive(:dig).with(:cache, :compliance, :phi_max_ttl).and_return(3600)
+    Legion::Cache.shutdown
+    @mode = ENV['LEGION_MODE']
+    @settings = Legion::Settings[:cache].dup
+    @local_settings = Legion::Settings[:cache_local].dup
+    ENV['LEGION_MODE'] = 'lite'
+    Legion::Settings[:cache][:enabled] = true
+    Legion::Settings[:cache][:compliance] = { phi_max_ttl: 60 }
+    Legion::Settings[:cache_local][:enabled] = true
+    @now = 1000.0
+    allow(Legion::Cache::Memory.instance_variable_get(:@store)).to receive(:monotonic_now) { @now }
+    Legion::Cache.setup
+    allow(Legion::Cache::Local).to receive(:build_driver).and_return(Legion::Cache::Memory)
+    Legion::Cache::Local.setup
   end
 
-  describe 'Legion::Cache.phi_max_ttl' do
-    it 'returns the configured phi_max_ttl' do
-      expect(Legion::Cache.phi_max_ttl).to eq(3600)
+  after do
+    Legion::Cache.shutdown
+    Legion::Settings[:cache] = @settings
+    Legion::Settings[:cache_local] = @local_settings
+    @mode ? ENV['LEGION_MODE'] = @mode : ENV.delete('LEGION_MODE')
+  end
+
+  [Legion::Cache, Legion::Cache::Local].each do |cache|
+    it "expires PHI for all synchronous #{cache} write routes, including immortal TTL requests" do
+      cache.set('set', 'private', ttl: 0, phi: true, async: false)
+      cache.set_sync('sync', 'private', ttl: -1, phi: true)
+      cache.mset({ 'batch' => 'private' }, ttl: 7200, phi: true, async: false)
+      cache.mset_sync({ 'batch_sync' => 'private' }, ttl: 0, phi: true)
+      cache.set_nx('nx', 'private', ttl: 0, phi: true)
+      cache.cas('cas', ttl: 0, phi: true) { 'private' }
+      cache.set_sync('ordinary', 'public', ttl: 0)
+
+      %w[set sync batch batch_sync nx cas].each { |key| expect(cache.get(key)).to eq('private') }
+      @now += 61
+      %w[set sync batch batch_sync nx cas].each { |key| expect(cache.get(key)).to be_nil }
+      expect(cache.get('ordinary')).to eq('public')
+    end
+
+    it "retains the PHI cap through asynchronous #{cache} admission" do
+      expect(cache.set('async', 'private', ttl: 0, phi: true)).to be(true)
+      expect(cache.mset({ 'async_batch' => 'private' }, ttl: 7200, phi: true)).to be(true)
+      cache.instance_variable_get(:@async_writer).stop
+
+      expect(cache.get('async')).to eq('private')
+      expect(cache.get('async_batch')).to eq('private')
+      @now += 61
+      expect(cache.get('async')).to be_nil
+      expect(cache.get('async_batch')).to be_nil
     end
   end
 
-  describe 'Legion::Cache.enforce_phi_ttl' do
-    it 'caps ttl at phi_max_ttl when phi: true' do
-      result = Legion::Cache.enforce_phi_ttl(7200, phi: true)
-      expect(result).to eq(3600)
-    end
-
-    it 'returns original ttl when phi is false' do
-      result = Legion::Cache.enforce_phi_ttl(7200, phi: false)
-      expect(result).to eq(7200)
-    end
-
-    it 'returns original ttl when phi key is absent' do
-      result = Legion::Cache.enforce_phi_ttl(7200)
-      expect(result).to eq(7200)
-    end
-
-    it 'caps even if ttl is below phi_max_ttl -- passes through lower value' do
-      result = Legion::Cache.enforce_phi_ttl(60, phi: true)
-      expect(result).to eq(60)
-    end
-
-    it 'caps at phi_max_ttl when ttl exceeds it and phi: true' do
-      result = Legion::Cache.enforce_phi_ttl(86_400, phi: true)
-      expect(result).to eq(3600)
-    end
-  end
-
-  describe 'Legion::Cache.set with phi: true option' do
-    before do
-      allow(Legion::Cache::Memory).to receive(:set).with(anything, anything, ttl: anything)
-      Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(true))
-    end
-
-    after do
-      Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(false))
-    end
-
-    it 'enforces phi max ttl before delegating to memory adapter' do
-      Legion::Cache.set('phi:task:99', 'value', ttl: 7200, phi: true, async: false)
-      expect(Legion::Cache::Memory).to have_received(:set).with('phi:task:99', 'value', ttl: 3600)
-    end
-
-    it 'passes original ttl when phi is not set' do
-      Legion::Cache.set('task:99', 'value', ttl: 7200, async: false)
-      expect(Legion::Cache::Memory).to have_received(:set).with('task:99', 'value', ttl: 7200)
-    end
+  it 'rejects invalid PHI caps instead of creating unbounded entries' do
+    Legion::Settings[:cache][:compliance] = { phi_max_ttl: 0 }
+    expect { Legion::Cache.set_sync('private', 'value', phi: true) }.to raise_error(ArgumentError)
+    expect(Legion::Cache.get('private')).to be_nil
   end
 end

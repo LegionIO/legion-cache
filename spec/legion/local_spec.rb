@@ -5,71 +5,6 @@ require 'legion/cache'
 require 'legion/cache/local'
 
 RSpec.describe Legion::Cache::Local do
-  describe 'module interface' do
-    it 'responds to setup' do
-      expect(described_class).to respond_to(:setup)
-    end
-
-    it 'responds to shutdown' do
-      expect(described_class).to respond_to(:shutdown)
-    end
-
-    it 'responds to connected?' do
-      expect(described_class).to respond_to(:connected?)
-    end
-
-    it 'responds to get' do
-      expect(described_class).to respond_to(:get)
-    end
-
-    it 'responds to set' do
-      expect(described_class).to respond_to(:set)
-    end
-
-    it 'responds to delete' do
-      expect(described_class).to respond_to(:delete)
-    end
-
-    it 'responds to flush' do
-      expect(described_class).to respond_to(:flush)
-    end
-
-    it 'responds to fetch' do
-      expect(described_class).to respond_to(:fetch)
-    end
-
-    it 'responds to client' do
-      expect(described_class).to respond_to(:client)
-    end
-
-    it 'responds to reset!' do
-      expect(described_class).to respond_to(:reset!)
-    end
-
-    it 'responds to close' do
-      expect(described_class).to respond_to(:close)
-    end
-
-    it 'responds to restart' do
-      expect(described_class).to respond_to(:restart)
-    end
-
-    it 'responds to size' do
-      expect(described_class).to respond_to(:size)
-    end
-
-    it 'responds to available' do
-      expect(described_class).to respond_to(:available)
-    end
-
-    it 'responds to pool_size' do
-      expect(described_class).to respond_to(:pool_size)
-    end
-
-    it 'responds to timeout' do
-      expect(described_class).to respond_to(:timeout)
-    end
-  end
 
   describe 'asynchronous mutations' do
     let(:entered) { Queue.new }
@@ -78,6 +13,9 @@ RSpec.describe Legion::Cache::Local do
     let(:memory) { Legion::Cache::Memory }
 
     before do
+      Legion::Cache.shutdown
+      Legion::Settings[:cache][:enabled] = true
+      Legion::Settings[:cache_local][:enabled] = true
       described_class.reset!
       memory.reset!
       allow(described_class).to receive(:build_driver).and_return(memory)
@@ -91,6 +29,7 @@ RSpec.describe Legion::Cache::Local do
       release << true
       @caller&.join(2)
       described_class.shutdown
+      Legion::Cache.shutdown
       memory.reset!
     end
 
@@ -122,8 +61,9 @@ RSpec.describe Legion::Cache::Local do
     end
 
     it 'keeps explicit synchronous mutations immediately visible through the fallback facade' do
-      allow(Legion::Cache).to receive(:using_local?).and_return(true)
-      allow(Legion::Cache).to receive(:using_memory?).and_return(false)
+      Legion::Cache.instance_variable_get(:@using_local).make_true
+      Legion::Cache.instance_variable_get(:@using_memory).make_false
+      Legion::Cache.instance_variable_get(:@connected).make_true
 
       Legion::Cache.set('key', 'value', async: false)
       expect(described_class.get('key')).to eq('value')
@@ -135,14 +75,27 @@ RSpec.describe Legion::Cache::Local do
       expect(described_class.get('key')).to be_nil
     end
 
-    it 'propagates synchronous failures but handles background failures before draining' do
+    it 'fails closed when the Local backend loses its connection' do
       allow(memory).to receive(:set_sync).and_raise(IOError, 'write failed')
 
-      expect { described_class.set('key', 'value', async: false) }.to raise_error(IOError, 'write failed')
-      expect(described_class.set('key', 'value', async: true)).to be(true)
-      described_class.shutdown
+      expect(described_class.set('key', 'value', async: false)).to be(false)
+      expect(described_class.connected?).to be(false)
+      expect(described_class.set('key', 'value', async: true)).to be(false)
+      expect(described_class.cas('key') { raise 'must not run' }).to be(false)
+    end
 
-      expect(memory.get('key')).to be_nil
+    it 'rebuilds a missing driver on restart and preserves synchronous writes' do
+      described_class.shutdown
+      expect(described_class.restart).to be(true)
+      expect(described_class.set_sync('key', 'restarted')).to be(true)
+      expect(described_class.get('key')).to eq('restarted')
+    end
+
+    it 'propagates application fetch and cas errors without disconnecting Local' do
+      expect { described_class.fetch('key') { raise IOError, 'application' } }.to raise_error(IOError, 'application')
+      expect { described_class.cas('key') { raise IOError, 'application' } }.to raise_error(IOError, 'application')
+      expect(described_class.connected?).to be(true)
+      expect(described_class.get('key')).to be_nil
     end
   end
 

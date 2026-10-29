@@ -4,6 +4,7 @@ require 'concurrent'
 require 'legion/logging/helper'
 require 'legion/cache/settings'
 require 'legion/cache/async_writer'
+require 'legion/cache/pool'
 
 module Legion
   module Cache
@@ -13,49 +14,47 @@ module Legion
 
       class << self
         include Legion::Logging::Helper
+        include Legion::Cache::Pool
 
-        def setup(**)
-          return unless enabled?
-          return if connected?
+        def setup(**opts)
+          return false unless enabled?
+          return true if connected?
 
-          settings = local_settings
-          return unless settings[:enabled]
-
+          @connection_options = (@connection_options || {}).merge(opts)
+          settings = local_settings.merge(@connection_options)
           driver_name = settings[:driver] || Legion::Cache::Settings.driver
           @driver_name = Legion::Cache::Settings.normalize_driver(driver_name)
           @driver = build_driver(driver_name)
-          @driver.client(**settings, logger: log, **)
+          @driver.instance_variable_set(:@cache_settings, settings)
+          @driver.instance_variable_set(:@cache_failure_callback, ->(error) { cache_backend_failed(error) })
+          @driver.client(**settings, logger: log)
           @async_writer.start
-          @connected.make_true
-          servers = Array(settings[:servers]).join(', ')
-          log.info "Legion::Cache::Local connected (#{driver_name}) to #{servers}"
+          cache_mark_connected(true)
+          true
         rescue StandardError => e
+          @driver&.close
+          @driver = nil
+          cache_mark_connected(false)
           handle_exception(e, level: :warn, handled: true, operation: :cache_local_setup, driver: driver_name)
-          @connected.make_false
+          raise unless cache_connection_error?(e)
+
+          false
         end
 
         def shutdown
-          return unless @connected
-
-          log.info 'Shutting down Legion::Cache::Local'
           @async_writer.stop
           @driver&.close
           @driver = nil
           @driver_name = nil
-          @connected.make_false
+          cache_mark_connected(false)
         end
 
         def enabled?
-          return true unless defined?(Legion::Settings)
-
-          Legion::Settings.dig(:cache_local, :enabled) != false
-        rescue StandardError => e
-          handle_exception(e, level: :warn, handled: true, operation: :cache_local_enabled)
-          true
+          !defined?(Legion::Settings) || Legion::Settings.dig(:cache_local, :enabled) != false
         end
 
         def connected?
-          @connected&.true? || false
+          enabled? && @connected.value
         end
 
         def driver_name
@@ -63,179 +62,160 @@ module Legion
         end
 
         def get(key)
-          result = @driver.get(key)
-          log.debug { "[cache:local] GET #{key} hit=#{!result.nil?}" }
-          result
-        rescue StandardError => e
-          handle_exception(e, level: :warn, handled: true, operation: :cache_local_get, key: key)
-          nil
+          local_operation(:get, key, failure: nil)
         end
 
-        def set(key, value, ttl: nil, async: true, **)
-          if async && @async_writer.running?
-            @async_writer.enqueue { set_sync(key, value, ttl: ttl, **) }
-            true
+        def set(key, value, ttl: nil, async: true, phi: false, **)
+          return false unless enabled? && connected?
+
+          ttl = local_write_ttl(ttl, phi: phi)
+          if async
+            @async_writer.enqueue(key: key) { set_sync(key, value, ttl: ttl) }
           else
-            set_sync(key, value, ttl: ttl, **)
+            set_sync(key, value, ttl: ttl)
           end
         end
 
-        def set_sync(key, value, ttl: nil, **)
-          effective_ttl = ttl || local_default_ttl
-          result = @driver.set_sync(key, value, ttl: effective_ttl)
-          log.debug { "[cache:local] SET #{key} ttl=#{effective_ttl} success=#{result}" }
-          result
-        rescue StandardError => e
-          handle_exception(e, level: :error, handled: false, operation: :cache_local_set_sync, key: key, ttl: effective_ttl)
-          raise
+        def set_sync(key, value, ttl: nil, phi: false, **)
+          local_operation(:set_sync, key, value, ttl: local_write_ttl(ttl, phi: phi), failure: false)
         end
 
-        def fetch(key, ttl: nil, &)
-          result = @driver.fetch(key, ttl: ttl, &)
-          log.debug { "[cache:local] FETCH #{key} hit=#{!result.nil?}" }
-          result
-        rescue StandardError => e
-          handle_exception(e, level: :warn, handled: true, operation: :cache_local_fetch, key: key, ttl: ttl)
-          nil
+        def set_nx(key, value, ttl: nil, phi: false)
+          local_operation(:set_nx, key, value, ttl: local_write_ttl(ttl, phi: phi), failure: false)
+        end
+
+        def cas(key, ttl: nil, phi: false, &block)
+          local_operation(:cas, key, ttl: local_write_ttl(ttl, phi: phi), failure: false, &block)
+        end
+
+        def fetch(key, ttl: nil)
+          cached = get(key)
+          return cached unless cached.nil?
+          return nil unless block_given?
+
+          value = yield
+          set_sync(key, value, ttl: ttl)
+          value
         end
 
         def delete(key, async: true, **)
-          if async && @async_writer.running?
-            @async_writer.enqueue { delete_sync(key) }
-            true
+          return false unless enabled? && connected?
+
+          if async
+            @async_writer.enqueue(key: key) { delete_sync(key) }
           else
             delete_sync(key)
           end
         end
 
         def delete_sync(key)
-          result = @driver.delete_sync(key)
-          log.debug { "[cache:local] DELETE #{key} success=#{result}" }
-          result
-        rescue StandardError => e
-          handle_exception(e, level: :error, handled: false, operation: :cache_local_delete_sync, key: key)
-          raise
+          local_operation(:delete_sync, key, failure: false)
         end
 
         def flush
-          result = @driver.flush
-          log.debug { '[cache:local] FLUSH completed' }
-          result
-        rescue StandardError => e
-          handle_exception(e, level: :warn, handled: true, operation: :cache_local_flush)
-          nil
+          local_operation(:flush, failure: false)
         end
 
         def mget(*keys)
-          keys = keys.flatten
-          return {} if keys.empty?
+          return {} unless enabled?
 
-          keys.to_h { |key| [key, get(key)] }
+          keys.flatten.to_h { |key| [key, get(key)] }
         end
 
-        def mset(hash, ttl: nil, async: true, **)
-          return true if hash.empty?
+        def mset(hash, ttl: nil, async: true, phi: false, **)
+          return false unless enabled?
 
-          if async && @async_writer.running?
-            @async_writer.enqueue { mset_sync(hash, ttl: ttl) }
-            true
-          else
-            mset_sync(hash, ttl: ttl)
+          accepted = true
+          hash.each do |key, value|
+            result = set(key, value, ttl: ttl, async: async, phi: phi)
+            accepted = false unless result
           end
+          accepted
         end
 
-        def mset_sync(hash, ttl: nil, **)
-          return true if hash.empty?
-
-          hash.each { |key, value| set_sync(key, value, ttl: ttl) }
-          true
+        def mset_sync(hash, ttl: nil, phi: false, **)
+          mset(hash, ttl: ttl, async: false, phi: phi)
         end
 
         def stats
-          {
-            driver:    driver_name,
-            servers:   local_servers,
-            enabled:   enabled?,
-            connected: connected?
-          }.freeze
-        rescue StandardError => e
-          handle_exception(e, level: :warn, handled: true, operation: :cache_local_stats)
-          { error: e.message }.freeze
+          { driver: driver_name, servers: Array(local_settings[:servers]), enabled: enabled?, connected: connected? }.freeze
         end
 
-        def client
-          @driver&.client
+        def client(**opts)
+          return nil unless enabled?
+
+          setup(**opts) unless @driver
+          @driver&.client if connected?
         end
 
         def close
-          @async_writer.stop
-          @driver&.close
-          @driver = nil
-          @driver_name = nil
-          @connected.make_false
-          log.info 'Legion::Cache::Local pool closed'
-          @connected
+          shutdown
         end
 
         def restart(**opts)
-          settings = local_settings
-          @async_writer.stop
-          @driver&.restart(**settings.merge(opts, logger: log))
-          @async_writer.start
-          @connected.make_true
-          log.info 'Legion::Cache::Local pool restarted'
-          @connected
+          shutdown
+          setup(**opts)
         end
 
         def size
-          @driver.size
+          connected? ? @driver.size : 0
         end
 
         def available
-          @driver.available
+          connected? ? @driver.available : 0
         end
 
         def pool_size
-          @driver.pool_size
+          connected? ? @driver.pool_size : 0
         end
 
         def timeout
-          @driver.timeout
+          connected? ? @driver.timeout : 0
         end
 
         def reset!
-          @async_writer.stop
-          @driver = nil
-          @driver_name = nil
-          @connected.make_false
-          log.debug 'Legion::Cache::Local state reset'
-          @connected
+          shutdown
+          @connection_options = nil
         end
 
         private
 
-        def local_servers
-          Array(local_settings[:servers])
-        rescue StandardError
-          []
+        def local_operation(operation, *args, failure:, **opts, &block)
+          return failure unless enabled? && connected? && @driver
+
+          user_error = nil
+          guarded = if block
+                      proc do |value|
+                        block.call(value)
+                      rescue StandardError => e
+                        user_error = e
+                        raise
+                      end
+                    end
+          @driver.public_send(operation, *args, **opts, &guarded)
+        rescue StandardError => e
+          raise if e.equal?(user_error) || !cache_connection_error?(e)
+
+          cache_backend_failed(e)
+          handle_exception(e, level: :warn, handled: true, operation: operation)
+          failure
         end
 
-        def local_default_ttl
-          return 21_600 unless defined?(Legion::Settings)
+        def local_write_ttl(ttl, phi:)
+          effective = ttl || local_settings[:default_ttl] || 21_600
+          return effective unless phi
 
-          Legion::Settings.dig(:cache_local, :default_ttl) || 21_600
-        rescue StandardError
-          21_600
+          Legion::Cache.enforce_phi_ttl(effective, phi: phi)
         end
 
         def build_driver(driver_name)
           case Legion::Cache::Settings.normalize_driver(driver_name)
           when 'redis'
             require 'legion/cache/redis'
-            Legion::Cache::Redis.dup
+            Object.new.extend(Legion::Cache::Redis, Legion::Logging::Helper)
           else
             require 'legion/cache/memcached'
-            Legion::Cache::Memcached.dup
+            Object.new.extend(Legion::Cache::Memcached, Legion::Logging::Helper)
           end
         end
 
