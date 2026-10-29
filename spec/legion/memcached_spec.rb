@@ -101,6 +101,72 @@ RSpec.describe Legion::Cache::Memcached do
       expect(cache.get('key')).to be_nil
     end
   end
+
+  describe '#cas' do
+    let(:values) { {} }
+    let(:tokens) { {} }
+
+    before do
+      sequence = 0
+      allow(dalli).to receive(:get_cas) { |key| [values[key], tokens[key]] }
+      allow(dalli).to receive(:get) { |key| values[key] }
+      allow(dalli).to receive(:add) do |key, value, _ttl|
+        next false if tokens.key?(key)
+
+        values[key] = value
+        tokens[key] = (sequence += 1)
+      end
+      allow(dalli).to receive(:set_cas) do |key, value, token, _ttl|
+        next false unless tokens[key] == token
+
+        values[key] = value
+        tokens[key] = (sequence += 1)
+      end
+    end
+
+    it 'retries an absent-key race without overwriting the competing update' do
+      competed = false
+      result = cache.cas('hash') do |current|
+        unless competed
+          competed = true
+          cache.cas('hash') { { 'other' => 1 } }
+        end
+        (current || {}).merge('ours' => 2)
+      end
+
+      expect(result).to eq('other' => 1, 'ours' => 2)
+      expect(cache.get('hash')).to eq(result)
+    end
+
+    it 'retries a stale CAS token after an existing-key update' do
+      cache.cas('counter') { 1 }
+      competed = false
+      result = cache.cas('counter') do |current|
+        unless competed
+          competed = true
+          cache.cas('counter') { |value| value + 1 }
+        end
+        current + 1
+      end
+
+      expect(result).to eq(3)
+      expect(cache.get('counter')).to eq(3)
+    end
+
+    it 'updates a stored nil using its CAS token rather than add' do
+      cache.cas('nullable') { nil }
+
+      expect(cache.cas('nullable') { |current| current.nil? ? false : true }).to be(false)
+      expect(cache.get('nullable')).to be(false)
+    end
+
+    it 'propagates application errors without committing an update' do
+      cache.cas('counter') { 1 }
+
+      expect { cache.cas('counter') { raise IOError, 'application failure' } }.to raise_error(IOError, 'application failure')
+      expect(cache.get('counter')).to eq(1)
+    end
+  end
 end
 
 RSpec.describe Legion::Cache::Memcached, :integration do

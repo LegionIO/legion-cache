@@ -74,6 +74,24 @@ module Legion
         result
       end
 
+      def cas(key, ttl: nil)
+        raise ArgumentError, 'a block is required' unless block_given?
+
+        effective_ttl = ttl || default_ttl
+        loop do
+          value, token = memcached_cas_request(key) { |conn| conn.get_cas(key) }
+          updated = yield value
+          committed = memcached_cas_request(key) do |conn|
+            if token.nil?
+              conn.add(key, updated, effective_ttl)
+            else
+              conn.set_cas(key, updated, token, effective_ttl)
+            end
+          end
+          return updated if committed
+        end
+      end
+
       def set_nx(key, value, ttl: nil)
         effective_ttl = ttl || default_ttl
         result = client.with { |conn| !!conn.add(key, value, effective_ttl) }
@@ -154,6 +172,14 @@ module Legion
       end
 
       private
+
+      def memcached_cas_request(key, &)
+        client.with(&)
+      rescue StandardError => e
+        cache_backend_failed(e)
+        handle_exception(e, level: :error, handled: false, operation: :memcached_cas, key: key)
+        raise
+      end
 
       def default_ttl
         return 3600 unless defined?(Legion::Settings)
