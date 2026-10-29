@@ -250,7 +250,7 @@ RSpec.describe Legion::Cache::Memcached, :integration do
   it 'can set' do
     expect(@cache).to respond_to :set
     expect(@cache.set('foo', 'bar')).to eq true
-    expect(@cache.set('baz', 'world', 10)).to eq true
+    expect(@cache.set('baz', 'world', ttl: 10)).to eq true
   end
 
   it 'can get' do
