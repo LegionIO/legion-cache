@@ -13,14 +13,14 @@ RSpec.describe 'exception handling' do
 
     describe 'reads return nil on error' do
       it 'get returns nil when store raises' do
-        allow(described_class).to receive(:expire_if_needed).and_raise(RuntimeError, 'boom')
+        allow(described_class.instance_variable_get(:@store)).to receive(:get).and_raise(RuntimeError, 'boom')
         expect(described_class.get('key')).to be_nil
       end
     end
 
     describe 'sync writes re-raise' do
       it 'set_sync raises on error' do
-        allow(described_class.instance_variable_get(:@store)).to receive(:[]=).and_raise(RuntimeError, 'boom')
+        allow(described_class.instance_variable_get(:@store)).to receive(:set).and_raise(RuntimeError, 'boom')
         expect { described_class.set_sync('k', 'v', ttl: 60) }.to raise_error(RuntimeError, 'boom')
       end
     end
@@ -87,31 +87,5 @@ RSpec.describe 'exception handling' do
       allow(redis).to receive(:del).and_raise(StandardError, 'timeout')
       expect { cache.delete_sync('k') }.to raise_error(StandardError, 'timeout')
     end
-  end
-end
-
-RSpec.describe 'Legion::Cache top-level exception handling' do
-  before do
-    ENV['LEGION_MODE'] = 'lite'
-    Legion::Cache::Memory.setup
-    Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(true))
-    Legion::Cache.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(true))
-  end
-
-  after do
-    ENV.delete('LEGION_MODE')
-    Legion::Cache::Memory.reset!
-    Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(false))
-    Legion::Cache.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(false))
-  end
-
-  it 'get returns nil on internal error' do
-    allow(Legion::Cache::Memory).to receive(:get).and_raise(RuntimeError, 'boom')
-    expect(Legion::Cache.get('key')).to be_nil
-  end
-
-  it 'set with async: false re-raises on error from Memory' do
-    allow(Legion::Cache::Memory).to receive(:set).and_raise(RuntimeError, 'boom')
-    expect { Legion::Cache.set('k', 'v', ttl: 60, async: false) }.to raise_error(RuntimeError, 'boom')
   end
 end

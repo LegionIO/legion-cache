@@ -6,6 +6,7 @@ require 'legion/cache/local'
 
 RSpec.describe Legion::Cache::Cacheable do
   before { described_class.memory_clear! }
+  after { described_class.memory_clear! }
 
   describe '.memory_write and .memory_read' do
     it 'stores and retrieves a value' do
@@ -18,8 +19,8 @@ RSpec.describe Legion::Cache::Cacheable do
     end
 
     it 'returns nil for expired entries' do
-      described_class.memory_write('expired', 'old', 0)
-      sleep 0.01
+      described_class.memory_write('expired', 'old', 0.01)
+      sleep 0.03
       expect(described_class.memory_read('expired')).to be_nil
     end
 
@@ -27,6 +28,26 @@ RSpec.describe Legion::Cache::Cacheable do
       described_class.memory_write('key', 'first', 60)
       described_class.memory_write('key', 'second', 60)
       expect(described_class.memory_read('key')).to eq('second')
+    end
+
+    it 'treats zero TTL as no expiration, like Memory' do
+      described_class.memory_write('persistent', 'value', 0)
+      sleep 0.01
+
+      expect(described_class.memory_read('persistent')).to eq('value')
+    end
+
+    it 'bounds the fallback and evicts the oldest entry' do
+      described_class.memory_store.max_entries = 2
+      described_class.memory_write('oldest', 1, nil)
+      described_class.memory_write('second', 2, nil)
+      described_class.memory_write('third', 3, nil)
+
+      expect(described_class.memory_read('oldest')).to be_nil
+      expect(described_class.memory_read('second')).to eq(2)
+      expect(described_class.memory_read('third')).to eq(3)
+    ensure
+      described_class.memory_store.max_entries = Legion::Cache::ExpiringStore::DEFAULT_MAX_ENTRIES
     end
   end
 
@@ -42,14 +63,14 @@ RSpec.describe Legion::Cache::Cacheable do
 end
 
 RSpec.describe Legion::Cache::Cacheable, '.build_cache_key' do
-  it 'produces a key with module path, method name, and args hash' do
-    key = described_class.build_cache_key('MyModule', :my_method, exclude: [], user_id: 'me')
-    expect(key).to match(/\AMyModule\.my_method\.[a-f0-9]{32}\z/)
+  it 'never includes credential material in the cache key' do
+    key = described_class.build_cache_key('M', :m, exclude: [], token: 'secret-access-token')
+    expect(key).not_to include('secret-access-token')
   end
 
   it 'excludes filtered args from the hash' do
-    key_with = described_class.build_cache_key('M', :m, exclude: [:token], user_id: 'me', token: 'secret')
-    key_without = described_class.build_cache_key('M', :m, exclude: [:token], user_id: 'me')
+    key_with = described_class.build_cache_key('M', :m, exclude: [:trace_id], user_id: 'me', trace_id: 'trace')
+    key_without = described_class.build_cache_key('M', :m, exclude: [:trace_id], user_id: 'me')
     expect(key_with).to eq(key_without)
   end
 
@@ -63,11 +84,6 @@ RSpec.describe Legion::Cache::Cacheable, '.build_cache_key' do
     key_a = described_class.build_cache_key('M', :m, exclude: [], b: 2, a: 1)
     key_b = described_class.build_cache_key('M', :m, exclude: [], a: 1, b: 2)
     expect(key_a).to eq(key_b)
-  end
-
-  it 'handles empty kwargs' do
-    key = described_class.build_cache_key('M', :m, exclude: [])
-    expect(key).to match(/\AM\.m\.[a-f0-9]{32}\z/)
   end
 end
 
@@ -117,11 +133,6 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
         expect(described_class.cache_read('local.error', scope: :local)).to eq('fallback')
       end
 
-      it 'writes to Local cache' do
-        described_class.cache_write('local.w', 'data', ttl: 60, scope: :local)
-        expect(Legion::Cache::Local).to have_received(:set).with('local.w', 'data', ttl: 60, async: false)
-      end
-
       it 'falls back to memory when Local writes raise' do
         allow(Legion::Cache::Local).to receive(:set).with('local.error', 'data', ttl: 60, async: false).and_raise(StandardError, 'boom')
 
@@ -135,11 +146,20 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
     context 'when global cache is not available' do
       before do
         allow(described_class).to receive(:global_cache_available?).and_return(false)
+        allow(described_class).to receive(:local_cache_available?).and_return(false)
       end
 
       it 'falls back to memory store' do
         described_class.cache_write('global.key', 'value', ttl: 30, scope: :global)
         expect(described_class.cache_read('global.key', scope: :global)).to eq('value')
+      end
+
+      it 'checks Local before memory when global cache is unavailable' do
+        allow(described_class).to receive(:local_cache_available?).and_return(true)
+        allow(Legion::Cache::Local).to receive(:get).with('global.key').and_return('local value')
+        described_class.memory_write('global.key', 'memory value', 60)
+
+        expect(described_class.cache_read('global.key', scope: :global)).to eq('local value')
       end
     end
 
@@ -154,9 +174,31 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
         expect(described_class.cache_read('global.hit', scope: :global)).to eq('remote')
       end
 
-      it 'writes to global cache' do
+      it 'checks Local after a global cache miss and preserves false' do
+        allow(Legion::Cache).to receive(:get).with('global.local').and_return(nil)
+        allow(described_class).to receive(:local_cache_available?).and_return(true)
+        allow(Legion::Cache::Local).to receive(:get).with('global.local').and_return(false)
+        described_class.memory_write('global.local', 'memory value', 60)
+
+        expect(described_class.cache_read('global.local', scope: :global)).to be(false)
+      end
+
+      it 'falls back to memory when global writes are rejected' do
+        allow(Legion::Cache).to receive(:set).and_return(false)
+        allow(described_class).to receive(:local_cache_available?).and_return(false)
+        allow(Legion::Cache).to receive(:get).with('global.w').and_return(nil)
         described_class.cache_write('global.w', 'data', ttl: 120, scope: :global)
-        expect(Legion::Cache).to have_received(:set).with('global.w', 'data', ttl: 120, async: false)
+
+        expect(described_class.cache_read('global.w', scope: :global)).to eq('data')
+      end
+
+      it 'writes through Local before using memory when global writes are rejected' do
+        allow(Legion::Cache).to receive(:set).and_return(false)
+        allow(described_class).to receive(:local_cache_available?).and_return(true)
+        expect(Legion::Cache::Local).to receive(:set).with('global.w', 'data', ttl: 120, async: false).and_return(true)
+
+        described_class.cache_write('global.w', 'data', ttl: 120, scope: :global)
+        expect(described_class.memory_read('global.w')).to be_nil
       end
     end
   end
@@ -234,6 +276,53 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
 
       expect(second[:fetched_at]).to eq(first[:fetched_at])
     end
+
+    it 'preserves computed values during a global cache outage' do
+      mod = Module.new do
+        extend Legion::Cache::Cacheable
+
+        def fetch_global(**)
+          @calls = (@calls || 0) + 1
+        end
+        cache_method :fetch_global, ttl: 60, scope: :global
+      end
+      obj = Object.new.extend(mod)
+      allow(Legion::Cache::Cacheable).to receive(:global_cache_available?).and_return(true)
+      allow(Legion::Cache).to receive(:get).and_raise(IOError, 'read failed')
+      allow(Legion::Cache).to receive(:set).and_raise(IOError, 'write failed')
+
+      expect(obj.fetch_global).to eq(1)
+      expect(obj.fetch_global).to eq(1)
+    end
+
+    it 'propagates wrapped business errors without caching them' do
+      mod = Module.new do
+        extend Legion::Cache::Cacheable
+
+        def fetch_global(**)
+          raise ArgumentError, 'business failure'
+        end
+        cache_method :fetch_global, ttl: 60, scope: :global
+      end
+      obj = Object.new.extend(mod)
+      allow(Legion::Cache::Cacheable).to receive(:global_cache_available?).and_return(false)
+
+      expect { obj.fetch_global }.to raise_error(ArgumentError, 'business failure')
+    end
+
+    it 'isolates identically named methods in distinct anonymous modules' do
+      objects = %w[first second].map do |value|
+        mod = Module.new do
+          extend Legion::Cache::Cacheable
+
+          define_method(:fetch_value) { |**| value }
+          cache_method :fetch_value, ttl: 60
+        end
+        Object.new.extend(mod)
+      end
+
+      expect(objects.map(&:fetch_value)).to eq(%w[first second])
+    end
   end
 
   describe 'bypass_local_method_cache' do
@@ -260,8 +349,8 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
 
         extend Legion::Cache::Cacheable
 
-        def get_thing(id:, token: nil, **) # rubocop:disable Lint/UnusedMethodArgument
-          { id: id, t: Time.now.utc.to_f }
+        def get_thing(id:, token: nil, **)
+          { id: id, authorized: token == 'abc' }
         end
 
         cache_method :get_thing, ttl: 60, exclude_from_key: [:token]
@@ -270,10 +359,11 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_method DSL' do
 
     let(:token_instance) { Object.new.extend(token_module) }
 
-    it 'ignores excluded args when building cache key' do
+    it 'retains credential identity even when token is requested for exclusion' do
       first = token_instance.get_thing(id: 1, token: 'abc')
       second = token_instance.get_thing(id: 1, token: 'xyz')
-      expect(second[:t]).to eq(first[:t])
+      expect(first[:authorized]).to be(true)
+      expect(second[:authorized]).to be(false)
     end
   end
 

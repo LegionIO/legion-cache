@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
+require 'legion/cache'
 
 RSpec.describe Legion::Cache::Helper do
   let(:helper_class) do
@@ -107,26 +108,89 @@ RSpec.describe Legion::Cache::Helper do
     end
   end
 
-  describe '#cache_set' do
-    it 'delegates to Legion::Cache with namespaced key and explicit TTL' do
-      expect(Legion::Cache).to receive(:set).with('microsoft_teams:messages', 'data', ttl: 120, async: false, phi: false)
-      subject.cache_set(':messages', 'data', ttl: 120)
+  describe 'mutation behavior' do
+    let(:memory) { Legion::Cache::Memory }
+    let(:now) { 1000.0 }
+
+    before do
+      @mode = ENV.fetch('LEGION_MODE', nil)
+      ENV['LEGION_MODE'] = 'lite'
+      Legion::Cache.shutdown
+      memory.reset!
+      allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now)
+      Legion::Cache.setup
+      allow(Legion::Cache::Local).to receive(:build_driver).and_return(memory)
+      allow(Legion::Cache::Local).to receive(:local_settings).and_return(Legion::Cache::Settings.local)
+      Legion::Cache::Local.setup
     end
 
-    it 'uses cache_default_ttl when ttl is not provided' do
-      expect(Legion::Cache).to receive(:set).with('microsoft_teams:messages', 'data', ttl: 3600, async: false, phi: false)
-      subject.cache_set(':messages', 'data')
+    after do
+      Legion::Cache.shutdown
+      memory.reset!
+      @mode ? ENV['LEGION_MODE'] = @mode : ENV.delete('LEGION_MODE')
     end
 
-    it 'uses LEX override TTL when defined' do
+    def drain_mutations
+      [Legion::Cache, Legion::Cache::Local].each do |tier|
+        writer = tier.instance_variable_get(:@async_writer)
+        writer.stop
+        writer.start
+      end
+    end
+
+    %i[cache local_cache].each do |prefix|
+      context "with #{prefix} helpers" do
+        it 'stores and deletes namespaced entries' do
+          subject.public_send(:"#{prefix}_set", ':key', 'value')
+          drain_mutations
+          expect(subject.public_send(:"#{prefix}_get", ':key')).to eq('value')
+
+          subject.public_send(:"#{prefix}_delete", ':key')
+          drain_mutations
+          expect(subject.public_send(:"#{prefix}_get", ':key')).to be_nil
+        end
+
+        it 'expires explicit TTLs before the default TTL' do
+          subject.public_send(:"#{prefix}_set", ':short', 'short', ttl: 10)
+          subject.public_send(:"#{prefix}_set", ':default', 'default')
+          drain_mutations
+          allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 11)
+
+          expect(subject.public_send(:"#{prefix}_get", ':short')).to be_nil
+          expect(subject.public_send(:"#{prefix}_get", ':default')).to eq('default')
+        end
+
+        it 'expires PHI at the policy cap without shortening ordinary entries' do
+          subject.public_send(:"#{prefix}_set", ':phi', 'sensitive', ttl: 7200, phi: true)
+          subject.public_send(:"#{prefix}_set", ':ordinary', 'ordinary', ttl: 7200)
+          drain_mutations
+          allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 3601)
+
+          expect(subject.public_send(:"#{prefix}_get", ':phi')).to be_nil
+          expect(subject.public_send(:"#{prefix}_get", ':ordinary')).to eq('ordinary')
+        end
+
+        it 'stores the entire batch with its requested expiry' do
+          values = { ':a' => 'first', ':b' => 'second' }
+          subject.public_send(:"#{prefix}_mset", values, ttl: 10)
+          drain_mutations
+          expect(subject.public_send(:"#{prefix}_mget", *values.keys)).to eq(values)
+
+          allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 11)
+          expect(subject.public_send(:"#{prefix}_mget", *values.keys)).to eq(':a' => nil, ':b' => nil)
+        end
+      end
+    end
+
+    it 'uses the extension TTL override for shared-cache entries' do
       obj = custom_ttl_class.new
-      expect(Legion::Cache).to receive(:set).with('custom_lex:key', 'val', ttl: 600, async: false, phi: false)
-      obj.cache_set(':key', 'val')
-    end
+      obj.cache_set(':key', 'value')
+      drain_mutations
+      allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 599)
+      expect(obj.cache_get(':key')).to eq('value')
 
-    it 'forwards phi: true to Legion::Cache.set' do
-      expect(Legion::Cache).to receive(:set).with('microsoft_teams:phi_data', 'secret', ttl: 7200, async: false, phi: true)
-      subject.cache_set(':phi_data', 'secret', ttl: 7200, phi: true)
+      allow(memory.instance_variable_get(:@store)).to receive(:monotonic_now).and_return(now + 601)
+      expect(obj.cache_get(':key')).to be_nil
     end
   end
 
@@ -134,13 +198,6 @@ RSpec.describe Legion::Cache::Helper do
     it 'delegates to Legion::Cache with namespaced key' do
       expect(Legion::Cache).to receive(:get).with('microsoft_teams:messages').and_return('data')
       expect(subject.cache_get(':messages')).to eq('data')
-    end
-  end
-
-  describe '#cache_delete' do
-    it 'delegates to Legion::Cache with namespaced key' do
-      expect(Legion::Cache).to receive(:delete).with('microsoft_teams:messages', async: false)
-      subject.cache_delete(':messages')
     end
   end
 
@@ -168,37 +225,10 @@ RSpec.describe Legion::Cache::Helper do
     end
   end
 
-  describe '#local_cache_set' do
-    it 'delegates to Legion::Cache::Local with namespaced key' do
-      allow(Legion::Cache).to receive(:enforce_phi_ttl).with(21_600, phi: false).and_return(21_600)
-      expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:hwm', 'ts', ttl: 21_600, async: false)
-      subject.local_cache_set(':hwm', 'ts')
-    end
-
-    it 'uses explicit TTL when provided' do
-      allow(Legion::Cache).to receive(:enforce_phi_ttl).with(300, phi: false).and_return(300)
-      expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:hwm', 'ts', ttl: 300, async: false)
-      subject.local_cache_set(':hwm', 'ts', ttl: 300)
-    end
-
-    it 'enforces PHI TTL cap' do
-      allow(Legion::Cache).to receive(:enforce_phi_ttl).with(7200, phi: true).and_return(3600)
-      expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:phi', 'data', ttl: 3600, async: false)
-      subject.local_cache_set(':phi', 'data', ttl: 7200, phi: true)
-    end
-  end
-
   describe '#local_cache_get' do
     it 'delegates to Legion::Cache::Local with namespaced key' do
       expect(Legion::Cache::Local).to receive(:get).with('microsoft_teams:hwm').and_return('ts')
       expect(subject.local_cache_get(':hwm')).to eq('ts')
-    end
-  end
-
-  describe '#local_cache_delete' do
-    it 'delegates to Legion::Cache::Local with namespaced key' do
-      expect(Legion::Cache::Local).to receive(:delete).with('microsoft_teams:hwm', async: false)
-      subject.local_cache_delete(':hwm')
     end
   end
 
@@ -339,17 +369,6 @@ RSpec.describe Legion::Cache::Helper do
     context 'with Redis backend' do
       before { allow(subject).to receive(:cache_redis?).and_return(true) }
 
-      it 'preserves TTL semantics via sequential set calls' do
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:a', 'v1', ttl: 3600, async: false)
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:b', 'v2', ttl: 3600, async: false)
-        subject.cache_mset({ ':a' => 'v1', ':b' => 'v2' })
-      end
-
-      it 'uses explicit TTL when provided' do
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:k', 'val', ttl: 300, async: false)
-        subject.cache_mset({ ':k' => 'val' }, ttl: 300)
-      end
-
       it 'returns true for empty hash without calling set' do
         expect(Legion::Cache).not_to receive(:set)
         expect(subject.cache_mset({})).to be true
@@ -358,26 +377,6 @@ RSpec.describe Legion::Cache::Helper do
       it 'returns false on error' do
         allow(Legion::Cache).to receive(:set).and_raise(StandardError, 'fail')
         expect(subject.cache_mset({ ':x' => 'v' })).to be false
-      end
-    end
-
-    context 'with Memcached backend' do
-      before { allow(subject).to receive(:cache_redis?).and_return(false) }
-
-      it 'falls back to sequential sets using default TTL' do
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:a', 'v1', ttl: 3600, async: false)
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:b', 'v2', ttl: 3600, async: false)
-        subject.cache_mset({ ':a' => 'v1', ':b' => 'v2' })
-      end
-
-      it 'uses explicit TTL when provided' do
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:k', 'val', ttl: 300, async: false)
-        subject.cache_mset({ ':k' => 'val' }, ttl: 300)
-      end
-
-      it 'returns true on success' do
-        allow(Legion::Cache).to receive(:set)
-        expect(subject.cache_mset({ ':k' => 'v' })).to be true
       end
     end
   end
@@ -409,35 +408,57 @@ RSpec.describe Legion::Cache::Helper do
   end
 
   describe '#local_cache_mset' do
-    context 'with Redis local backend' do
-      before { allow(subject).to receive(:local_cache_redis?).and_return(true) }
-
-      it 'preserves TTL semantics via sequential local set calls' do
-        expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:k', 'v', ttl: 21_600, async: false)
-        subject.local_cache_mset({ ':k' => 'v' })
-      end
-    end
-
-    context 'with Memcached local backend' do
-      before { allow(subject).to receive(:local_cache_redis?).and_return(false) }
-
-      it 'falls back to sequential local sets' do
-        expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:k', 'v', ttl: 21_600, async: false)
-        subject.local_cache_mset({ ':k' => 'v' })
-      end
-
-      it 'uses explicit TTL when provided' do
-        expect(Legion::Cache::Local).to receive(:set).with('microsoft_teams:k', 'v', ttl: 120, async: false)
-        subject.local_cache_mset({ ':k' => 'v' }, ttl: 120)
-      end
-    end
-
     it 'returns true for empty hash' do
       expect(subject.local_cache_mset({})).to be true
     end
   end
 
   # --- Issue #4: RedisHash helper methods ---
+
+  describe 'emulated hash mutations' do
+    before do
+      @mode = ENV.fetch('LEGION_MODE', nil)
+      ENV['LEGION_MODE'] = 'lite'
+      Legion::Cache.shutdown
+      Legion::Cache.setup
+      allow(subject).to receive(:cache_redis?).and_return(false)
+    end
+
+    after do
+      Legion::Cache.shutdown
+      @mode ? ENV['LEGION_MODE'] = @mode : ENV.delete('LEGION_MODE')
+      Legion::Cache::Memory.reset!
+    end
+
+    it 'retains fields added concurrently from the same initial snapshot' do
+      barrier = Concurrent::CyclicBarrier.new(2)
+      main_thread = Thread.current
+      allow(Legion::Cache).to receive(:get).and_wrap_original do |method, *args|
+        value = method.call(*args)
+        barrier.wait(2) unless Thread.current == main_thread
+        value
+      end
+
+      workers = %w[first second].map do |field|
+        Thread.new { subject.cache_hset(':atomic', field => field) }
+      end
+
+      expect(workers.map(&:value)).to eq([true, true])
+      expect(subject.cache_hgetall(':atomic')).to eq('first' => 'first', 'second' => 'second')
+    end
+
+    it 'merges and removes fields without dropping unrelated fields' do
+      subject.cache_hset(':hash', 'keep' => 'one', 'remove' => 'two')
+      subject.cache_hset(':hash', 'added' => 'three')
+
+      expect(subject.cache_hdel(':hash', 'remove', 'remove')).to eq(1)
+      expect(subject.cache_hgetall(':hash')).to eq('keep' => 'one', 'added' => 'three')
+    end
+
+    it 'returns zero when removing fields from an absent hash' do
+      expect(subject.cache_hdel(':absent', 'field')).to eq(0)
+    end
+  end
 
   describe '#cache_hset' do
     context 'with Redis backend' do
@@ -451,29 +472,6 @@ RSpec.describe Legion::Cache::Helper do
       it 'returns false on error' do
         allow(Legion::Cache::RedisHash).to receive(:hset).and_raise(StandardError, 'fail')
         expect(subject.cache_hset(':h', {})).to be false
-      end
-    end
-
-    context 'with Memcached backend' do
-      before { allow(subject).to receive(:cache_redis?).and_return(false) }
-
-      it 'serializes hash as JSON via cache set (merge)' do
-        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return(nil)
-        expect(Legion::Cache).to receive(:set) do |key, json, **opts|
-          expect(key).to eq('microsoft_teams:h')
-          expect(opts).to eq(ttl: 3600, async: false)
-          expect(Legion::JSON.load(json)).to eq(f: 'v')
-        end
-        subject.cache_hset(':h', { 'f' => 'v' })
-      end
-
-      it 'merges new fields into existing JSON hash' do
-        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return('{"existing":"val"}')
-        expect(Legion::Cache).to receive(:set) do |_key, json, **_opts|
-          parsed = Legion::JSON.load(json)
-          expect(parsed).to include(existing: 'val', f: 'v')
-        end
-        subject.cache_hset(':h', { 'f' => 'v' })
       end
     end
   end
@@ -520,24 +518,6 @@ RSpec.describe Legion::Cache::Helper do
 
       it 'returns 0 on error' do
         allow(Legion::Cache::RedisHash).to receive(:hdel).and_raise(StandardError, 'fail')
-        expect(subject.cache_hdel(':h', 'f')).to eq(0)
-      end
-    end
-
-    context 'with Memcached backend' do
-      before { allow(subject).to receive(:cache_redis?).and_return(false) }
-
-      it 'removes specified fields from JSON hash and returns count' do
-        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return('{"a":"1","b":"2"}')
-        expect(Legion::Cache).to receive(:set).with('microsoft_teams:h', anything, ttl: 3600, async: false) do |_k, json, **_opts|
-          parsed = Legion::JSON.load(json)
-          expect(parsed.keys.map(&:to_s)).not_to include('a')
-        end
-        expect(subject.cache_hdel(':h', 'a')).to eq(1)
-      end
-
-      it 'returns 0 when key is absent' do
-        allow(Legion::Cache).to receive(:get).with('microsoft_teams:h').and_return(nil)
         expect(subject.cache_hdel(':h', 'f')).to eq(0)
       end
     end

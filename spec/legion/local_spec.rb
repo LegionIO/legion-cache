@@ -5,87 +5,101 @@ require 'legion/cache'
 require 'legion/cache/local'
 
 RSpec.describe Legion::Cache::Local do
-  describe 'module interface' do
-    it 'responds to setup' do
-      expect(described_class).to respond_to(:setup)
+  describe 'asynchronous mutations' do
+    let(:entered) { Queue.new }
+    let(:release) { Queue.new }
+    let(:returned) { Queue.new }
+    let(:memory) { Legion::Cache::Memory }
+
+    before do
+      Legion::Cache.shutdown
+      Legion::Settings[:cache][:enabled] = true
+      Legion::Settings[:cache_local][:enabled] = true
+      described_class.reset!
+      memory.reset!
+      allow(described_class).to receive(:build_driver).and_return(memory)
+      allow(described_class).to receive(:local_settings).and_return(
+        Legion::Cache::Settings.local.merge(async: { pool_size: 1, queue_size: 10 })
+      )
+      described_class.setup
     end
 
-    it 'responds to shutdown' do
-      expect(described_class).to respond_to(:shutdown)
+    after do
+      release << true
+      @caller&.join(2)
+      described_class.shutdown
+      Legion::Cache.shutdown
+      memory.reset!
     end
 
-    it 'responds to connected?' do
-      expect(described_class).to respond_to(:connected?)
+    {
+      set:    [:set_sync, %w[key updated], 'updated'],
+      delete: [:delete_sync, ['key'], nil],
+      mset:   [:set_sync, [{ 'key' => 'updated' }], 'updated']
+    }.each do |operation, (driver_method, arguments, expected)|
+      it "returns before a blocked #{operation} finishes and drains it before shutdown" do
+        memory.set_sync('key', 'original')
+        closed_values = Queue.new
+        allow(memory).to receive(:close).and_wrap_original do |method|
+          closed_values << memory.get('key')
+          method.call
+        end
+        allow(memory).to receive(driver_method).and_wrap_original do |method, *args, **opts|
+          entered << Thread.current
+          release.pop
+          method.call(*args, **opts)
+        end
+
+        @caller = Thread.new { returned << described_class.public_send(operation, *arguments, async: true) }
+        worker = entered.pop(timeout: 2)
+
+        expect(returned.pop(timeout: 2)).to be(true)
+        expect(worker).not_to eq(@caller)
+        expect(described_class.get('key')).to eq('original')
+
+        release << true
+        described_class.shutdown
+
+        expect(closed_values.pop(timeout: 2)).to eq(expected)
+      end
     end
 
-    it 'responds to get' do
-      expect(described_class).to respond_to(:get)
+    it 'keeps explicit synchronous mutations immediately visible through the fallback facade' do
+      Legion::Cache.instance_variable_get(:@using_local).make_true
+      Legion::Cache.instance_variable_get(:@using_memory).make_false
+      Legion::Cache.instance_variable_get(:@connected).make_true
+
+      Legion::Cache.set('key', 'value', async: false)
+      expect(described_class.get('key')).to eq('value')
+
+      Legion::Cache.mset({ 'key' => 'updated', 'other' => 'batch' }, async: false)
+      expect(described_class.mget('key', 'other')).to eq('key' => 'updated', 'other' => 'batch')
+
+      Legion::Cache.delete('key', async: false)
+      expect(described_class.get('key')).to be_nil
     end
 
-    it 'responds to set' do
-      expect(described_class).to respond_to(:set)
+    it 'fails closed when the Local backend loses its connection' do
+      allow(memory).to receive(:set_sync).and_raise(IOError, 'write failed')
+
+      expect(described_class.set('key', 'value', async: false)).to be(false)
+      expect(described_class.connected?).to be(false)
+      expect(described_class.set('key', 'value', async: true)).to be(false)
+      expect(described_class.cas('key') { raise 'must not run' }).to be(false)
     end
 
-    it 'responds to delete' do
-      expect(described_class).to respond_to(:delete)
+    it 'rebuilds a missing driver on restart and preserves synchronous writes' do
+      described_class.shutdown
+      expect(described_class.restart).to be(true)
+      expect(described_class.set_sync('key', 'restarted')).to be(true)
+      expect(described_class.get('key')).to eq('restarted')
     end
 
-    it 'responds to flush' do
-      expect(described_class).to respond_to(:flush)
-    end
-
-    it 'responds to fetch' do
-      expect(described_class).to respond_to(:fetch)
-    end
-
-    it 'responds to client' do
-      expect(described_class).to respond_to(:client)
-    end
-
-    it 'responds to reset!' do
-      expect(described_class).to respond_to(:reset!)
-    end
-
-    it 'responds to close' do
-      expect(described_class).to respond_to(:close)
-    end
-
-    it 'responds to restart' do
-      expect(described_class).to respond_to(:restart)
-    end
-
-    it 'responds to size' do
-      expect(described_class).to respond_to(:size)
-    end
-
-    it 'responds to available' do
-      expect(described_class).to respond_to(:available)
-    end
-
-    it 'responds to pool_size' do
-      expect(described_class).to respond_to(:pool_size)
-    end
-
-    it 'responds to timeout' do
-      expect(described_class).to respond_to(:timeout)
-    end
-  end
-
-  describe 'method signatures' do
-    it 'responds to enabled?' do
-      expect(described_class).to respond_to(:enabled?)
-    end
-
-    it 'set accepts keyword ttl' do
-      driver = double('driver')
-      allow(driver).to receive(:set_sync)
-      described_class.instance_variable_set(:@driver, driver)
-      described_class.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(true))
-      expect { described_class.set('k', 'v', ttl: 120) }.not_to raise_error
-    end
-
-    it 'flush takes no arguments' do
-      expect(described_class.method(:flush).arity).to eq(0)
+    it 'propagates application fetch and cas errors without disconnecting Local' do
+      expect { described_class.fetch('key') { raise IOError, 'application' } }.to raise_error(IOError, 'application')
+      expect { described_class.cas('key') { raise IOError, 'application' } }.to raise_error(IOError, 'application')
+      expect(described_class.connected?).to be(true)
+      expect(described_class.get('key')).to be_nil
     end
   end
 
@@ -113,23 +127,23 @@ RSpec.describe 'Legion::Cache::Local integration', :integration do
   end
 
   it 'can set and get' do
-    expect(Legion::Cache::Local.set('local_test', 'hello')).to eq true
+    expect(Legion::Cache::Local.set('local_test', 'hello', async: false)).to eq true
     expect(Legion::Cache::Local.get('local_test')).to eq 'hello'
   end
 
   it 'can set with TTL' do
-    expect(Legion::Cache::Local.set('local_ttl', 'expires', 10)).to eq true
+    expect(Legion::Cache::Local.set('local_ttl', 'expires', ttl: 10, async: false)).to eq true
     expect(Legion::Cache::Local.get('local_ttl')).to eq 'expires'
   end
 
   it 'can delete' do
-    Legion::Cache::Local.set('local_del', 'gone')
-    expect(Legion::Cache::Local.delete('local_del')).to eq true
+    Legion::Cache::Local.set('local_del', 'gone', async: false)
+    expect(Legion::Cache::Local.delete('local_del', async: false)).to eq true
     expect(Legion::Cache::Local.get('local_del')).to be_nil
   end
 
   it 'can flush' do
-    Legion::Cache::Local.set('local_flush', 'bye')
+    Legion::Cache::Local.set('local_flush', 'bye', async: false)
     expect(Legion::Cache::Local.flush).to eq true
   end
 
@@ -153,14 +167,14 @@ RSpec.describe 'Legion::Cache::Local integration', :integration do
   it 'can restart with new values' do
     Legion::Cache::Local.restart(pool_size: 2, timeout: 1)
     expect(Legion::Cache::Local.connected?).to eq true
-    expect(Legion::Cache::Local.set('restart_test', 'works')).to eq true
+    expect(Legion::Cache::Local.set('restart_test', 'works', async: false)).to eq true
     expect(Legion::Cache::Local.get('restart_test')).to eq 'works'
   end
 
   it 'uses separate namespace from shared cache' do
-    Legion::Cache::Local.set('ns_test', 'local_value')
+    Legion::Cache::Local.set('ns_test', 'local_value', async: false)
     Legion::Cache.setup
-    Legion::Cache.set('ns_test', 'shared_value')
+    Legion::Cache.set('ns_test', 'shared_value', async: false)
     expect(Legion::Cache::Local.get('ns_test')).to eq 'local_value'
     expect(Legion::Cache.get('ns_test')).to eq 'shared_value'
     Legion::Cache.shutdown

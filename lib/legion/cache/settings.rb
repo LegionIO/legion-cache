@@ -81,6 +81,14 @@ module Legion
 
       DEFAULT_PORTS = { 'dalli' => 11_211, 'redis' => 6379 }.freeze
 
+      def self.connection_options(settings, overrides)
+        resolved = settings.merge(overrides)
+        resolved[:servers] = [] if overrides.key?(:server) && !overrides.key?(:servers)
+        resolved[:server] = nil if overrides.key?(:servers) && !overrides.key?(:server)
+        resolved[:cluster] = nil if (overrides.key?(:server) || overrides.key?(:servers)) && !overrides.key?(:cluster)
+        resolved
+      end
+
       def self.resolve_servers(driver:, server: nil, servers: [], port: nil)
         gem_driver = normalize_driver(driver)
         port ||= DEFAULT_PORTS.fetch(gem_driver, 11_211)

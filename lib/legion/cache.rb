@@ -4,7 +4,6 @@ require 'legion/logging/helper'
 require 'legion/cache/version'
 require 'legion/cache/settings'
 require 'legion/cache/cacheable'
-
 require 'legion/cache/memcached'
 require 'legion/cache/redis'
 require 'legion/cache/redis_hash'
@@ -26,18 +25,17 @@ module Legion
 
     class << self
       include Legion::Logging::Helper
+      include Legion::Cache::Pool
 
       def enabled?
-        return true unless defined?(Legion::Settings)
-
-        Legion::Settings.dig(:cache, :enabled) != false
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :cache_enabled)
-        true
+        !defined?(Legion::Settings) || Legion::Settings.dig(:cache, :enabled) != false
       end
 
       def connected?
-        @connected&.true? || false
+        return Legion::Cache::Memory.connected? if using_memory?
+        return Legion::Cache::Local.enabled? && Legion::Cache::Local.connected? if using_local?
+
+        enabled? && @connected.value
       end
 
       def driver_name
@@ -49,65 +47,50 @@ module Legion
 
       def stats
         {
-          driver:             driver_name,
-          servers:            resolved_servers,
-          enabled:            enabled?,
-          connected:          connected?,
-          using_local:        using_local?,
-          using_memory:       using_memory?,
-          pool_size:          safe_pool_size,
-          pool_available:     safe_pool_available,
-          async_pool_size:    async_writer_pool_size,
-          async_queue_depth:  async_writer_queue_depth,
-          async_processed:    async_writer_processed_count,
-          async_failed:       async_writer_failed_count,
-          reconnect_attempts: reconnector_attempts,
-          uptime:             uptime_seconds
+          driver: driver_name, servers: resolved_servers, enabled: enabled?, connected: connected?,
+          using_local: using_local?, using_memory: using_memory?, pool_size: pool_size, pool_available: available,
+          async_pool_size: async_writer.pool_size, async_queue_depth: async_writer.queue_depth,
+          async_processed: async_writer.processed_count, async_failed: async_writer.failed_count,
+          reconnect_attempts: @reconnector&.attempts || 0, uptime: @setup_at ? (Time.now - @setup_at).to_i : 0
         }.freeze
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :cache_stats)
-        { error: e.message }.freeze
       end
 
-      def setup(**)
-        return unless enabled?
-        return Legion::Settings[:cache][:connected] = true if connected?
+      def setup(**opts)
+        return true if connected?
 
+        @initialized = true
+        @connection_options = Legion::Cache::Settings.connection_options(@connection_options || {}, opts)
         @setup_at = Time.now
-
-        async_writer.start
-
         if ENV['LEGION_MODE'] == 'lite'
+          async_writer.start
           Legion::Cache::Memory.setup
           @using_memory.make_true
-          @connected.make_true
-          Legion::Settings[:cache][:connected] = true
-          log.info 'Legion::Cache using in-memory adapter (lite mode)'
-          return
+          @using_local.make_false
+          cache_mark_connected(true)
+          return true
         end
 
-        log.debug { "Legion::Cache setup driver=#{Legion::Settings[:cache][:driver]} servers=#{Array(Legion::Settings[:cache][:servers]).size}" }
-        setup_local
-        setup_shared(**)
+        Legion::Cache::Local.setup
+        unless enabled?
+          result = select_local_fallback
+          async_writer.start if result
+          return result
+        end
+
+        async_writer.start
+        setup_shared
       end
 
       def shutdown
-        log.info 'Shutting down Legion::Cache'
-        # 1. Drain async writer FIRST (while pool is still alive)
         async_writer.stop(timeout: configured_shutdown_timeout)
-        # 2. Stop reconnector
         stop_reconnector
-        # 3. Now close pools
-        if using_memory?
-          Legion::Cache::Memory.shutdown
-        else
-          close unless using_local?
-          Legion::Cache::Local.shutdown if Legion::Cache::Local.connected?
-        end
+        close_existing_shared_client
+        Legion::Cache::Local.shutdown
+        Legion::Cache::Memory.shutdown if using_memory?
         @using_local.make_false
         @using_memory.make_false
-        @connected.make_false
-        Legion::Settings[:cache][:connected] = false
+        cache_mark_connected(false)
+        @initialized = false
       end
 
       def local
@@ -119,467 +102,348 @@ module Legion
       end
 
       def using_local?
-        @using_local&.true? || false
+        @using_local.value
       end
 
       def using_memory?
-        @using_memory&.true? || false
+        @using_memory.value
       end
 
-      def client(**opts)
-        if ENV['LEGION_MODE'] == 'lite'
-          Legion::Cache::Memory.setup unless Legion::Cache::Memory.connected?
-          @using_memory.make_true
-          @using_local.make_false
-          @connected.make_true
-          @active_shared_driver = nil
-          Legion::Settings[:cache][:connected] = true if defined?(Legion::Settings)
-          return Legion::Cache::Memory.client
-        end
+      def client(**)
+        setup(**) unless @initialized
+        return Legion::Cache::Memory.client if using_memory?
+        return Legion::Cache::Local.client if using_local?
+        return nil unless connected?
 
-        configure_shared_adapter!(opts[:driver])
-        @using_memory.make_false
-        @using_local.make_false
-        result = super
-        # super (Pool) sets @connected to a plain boolean; restore AtomicBoolean
-        @connected = Concurrent::AtomicBoolean.new(true)
-        Legion::Settings[:cache][:connected] = true if defined?(Legion::Settings)
-        result
-      rescue StandardError
-        @connected = Concurrent::AtomicBoolean.new(false)
-        Legion::Settings[:cache][:connected] = false if defined?(Legion::Settings)
-        raise
+        @client
       end
 
       def get(key)
-        return Legion::Cache::Memory.get(key) if using_memory?
-        return Legion::Cache::Local.get(key) if using_local?
-        return Legion::Cache::Local.get(key) if failback_to_local?
+        result = cache_operation(:get, key, failure: nil)
+        return result unless result.nil?
 
-        configure_shared_adapter!
-        super
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :cache_get, key: key)
-        nil
+        local_cache_get(key)
       end
 
       def phi_max_ttl
-        return 3600 unless defined?(Legion::Settings)
+        configured = defined?(Legion::Settings) ? Legion::Settings.dig(:cache, :compliance, :phi_max_ttl) : nil
+        return 3600 if configured.nil?
+        return configured if configured.is_a?(Numeric) && configured.finite? && configured.positive?
 
-        Legion::Settings.dig(:cache, :compliance, :phi_max_ttl) || 3600
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :cache_phi_max_ttl)
-        3600
+        raise ArgumentError, 'phi_max_ttl must be positive and finite'
       end
 
       def enforce_phi_ttl(ttl, phi: false, **)
         return ttl unless phi == true
+        raise ArgumentError, 'PHI ttl must be numeric and finite' unless ttl.nil? || (ttl.is_a?(Numeric) && ttl.finite?)
+        return phi_max_ttl if ttl.nil? || !ttl.positive?
 
-        max = phi_max_ttl
-        [ttl, max].min
+        [ttl, phi_max_ttl].min
       end
 
       def set(key, value, ttl: nil, async: true, phi: false)
-        effective_ttl = resolve_ttl(ttl, phi: phi)
+        setup unless @initialized || connected?
+        return false unless connected?
 
-        if async && async_writer.running?
-          async_writer.enqueue { set_internal(key, value, ttl: effective_ttl) }
-          true
+        effective_ttl = resolve_ttl(ttl, phi: phi)
+        if async
+          async_writer.enqueue(key: key) { set_sync(key, value, ttl: effective_ttl) }
         else
-          set_internal(key, value, ttl: effective_ttl)
+          set_sync(key, value, ttl: effective_ttl)
         end
       end
 
-      def set_nx(key, value, ttl: nil)
-        effective_ttl = resolve_ttl(ttl)
-        return Legion::Cache::Memory.set_nx(key, value, ttl: effective_ttl) if using_memory?
-        return Legion::Cache::Local.set_nx(key, value, ttl: effective_ttl) if using_local?
-        return Legion::Cache::Local.set_nx(key, value, ttl: effective_ttl) if failback_to_local?
-
-        configure_shared_adapter!
-        super
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :cache_set_nx, key: key)
-        false
+      def set_nx(key, value, ttl: nil, phi: false)
+        cache_operation(:set_nx, key, value, ttl: resolve_ttl(ttl, phi: phi), failure: false)
       end
 
-      def set_sync(key, value, ttl: nil, **)
-        return Legion::Cache::Memory.set_sync(key, value, ttl: ttl) if using_memory?
-        return Legion::Cache::Local.set_sync(key, value, ttl: ttl) if using_local?
-        return Legion::Cache::Local.set_sync(key, value, ttl: ttl) if failback_to_local?
-
-        configure_shared_adapter!
-        super
+      def set_sync(key, value, ttl: nil, phi: false, **)
+        cache_operation(:set_sync, key, value, ttl: resolve_ttl(ttl, phi: phi), failure: false)
       end
 
-      def fetch(key, ttl: nil, &)
-        return Legion::Cache::Memory.fetch(key, ttl: ttl, &) if using_memory?
-        return Legion::Cache::Local.fetch(key, ttl: ttl, &) if using_local?
-        return Legion::Cache::Local.fetch(key, ttl: ttl, &) if failback_to_local?
+      def cas(key, ttl: nil, phi: false, &)
+        cache_operation(:cas, key, ttl: resolve_ttl(ttl, phi: phi), failure: false, &)
+      end
 
-        configure_shared_adapter!
-        super
+      def fetch(key, ttl: nil)
+        cached = get(key)
+        return cached unless cached.nil?
+        return nil unless block_given?
+
+        value = yield
+        set_sync(key, value, ttl: ttl)
+        value
       end
 
       def delete(key, async: true)
-        if async && async_writer.running?
-          async_writer.enqueue { delete_internal(key) }
-          true
+        setup unless @initialized || connected?
+        return false unless connected?
+
+        if async
+          async_writer.enqueue(key: key) { delete_sync(key) }
         else
-          delete_internal(key)
+          delete_sync(key)
         end
       end
 
       def delete_sync(key)
-        return Legion::Cache::Memory.delete_sync(key) if using_memory?
-        return Legion::Cache::Local.delete_sync(key) if using_local?
-        return Legion::Cache::Local.delete_sync(key) if failback_to_local?
-
-        configure_shared_adapter!
-        super
+        cache_operation(:delete_sync, key, failure: false)
       end
 
       def flush
-        return Legion::Cache::Memory.flush if using_memory?
-        return Legion::Cache::Local.flush if using_local?
-        return Legion::Cache::Local.flush if failback_to_local?
-
-        configure_shared_adapter!
-        super
+        cache_operation(:flush, failure: false)
       end
 
       def mget(*keys)
         keys = keys.flatten
         return {} if keys.empty?
-        return keys.to_h { |key| [key, Legion::Cache::Memory.get(key)] } if using_memory?
-        return Legion::Cache::Local.mget(*keys) if using_local?
-        return Legion::Cache::Local.mget(*keys) if failback_to_local?
 
-        configure_shared_adapter!
-        super
+        result = cache_operation(:mget, *keys, failure: {})
+        return result if using_memory? || using_local?
+
+        local_cache_mget(result, keys)
       end
 
-      def mset(hash, ttl: nil, async: true)
-        return true if hash.empty?
+      def mset(hash, ttl: nil, async: true, phi: false)
+        return mset_sync(hash, ttl: ttl, phi: phi) unless async
 
-        if async && async_writer.running?
-          async_writer.enqueue { mset_internal(hash, ttl: ttl) }
-          true
-        else
-          mset_internal(hash, ttl: ttl)
+        setup unless @initialized || connected?
+        return false unless connected?
+
+        effective_ttl = resolve_ttl(ttl, phi: phi)
+        accepted = true
+        hash.each do |key, value|
+          result = async_writer.enqueue(key: key) { set_sync(key, value, ttl: effective_ttl) }
+          accepted = false unless result
         end
+        accepted
       end
 
-      def mset_sync(hash, ttl: nil, **)
+      def mset_sync(hash, ttl: nil, phi: false, **)
         return true if hash.empty?
-        return hash.each { |key, value| Legion::Cache::Memory.set_sync(key, value, ttl: ttl) } && true if using_memory?
-        return Legion::Cache::Local.mset(hash, ttl: ttl) if using_local?
-        return Legion::Cache::Local.mset(hash, ttl: ttl) if failback_to_local?
 
-        configure_shared_adapter!
-        super
+        cache_operation(:mset_sync, hash, ttl: resolve_ttl(ttl, phi: phi), failure: false)
       end
 
       def close
-        if using_memory?
-          Legion::Cache::Memory.shutdown
-          @using_memory.make_false
-          @connected.make_false
-          Legion::Settings[:cache][:connected] = false if defined?(Legion::Settings)
-          return false
-        end
-
-        if using_local?
-          Legion::Cache::Local.close
-          @using_local.make_false
-          @connected.make_false
-          Legion::Settings[:cache][:connected] = false if defined?(Legion::Settings)
-          return false
-        end
-
-        return false unless instance_variable_defined?(:@client) && @client
-
-        configure_shared_adapter!
-        result = super
-        @connected = Concurrent::AtomicBoolean.new(false)
-        Legion::Settings[:cache][:connected] = false if defined?(Legion::Settings)
-        result
+        shutdown
       end
 
-      def restart(**opts)
-        configure_shared_adapter!(opts[:driver])
-        @using_memory.make_false
-        @using_local.make_false
-        result = super
-        @connected = Concurrent::AtomicBoolean.new(true)
-        Legion::Settings[:cache][:connected] = true if defined?(Legion::Settings)
-        result
+      def restart(**)
+        shutdown
+        setup(**)
       end
 
       def size
-        return Legion::Cache::Memory.size if using_memory?
-        return Legion::Cache::Local.size if using_local?
-
-        configure_shared_adapter!
-        super
+        pool_size
       end
 
       def available
+        return 0 unless connected?
         return Legion::Cache::Memory.available if using_memory?
         return Legion::Cache::Local.available if using_local?
 
-        configure_shared_adapter!
-        super
+        @client&.available || 0
       end
 
       def pool_size
+        return 0 unless connected?
         return Legion::Cache::Memory.size if using_memory?
         return Legion::Cache::Local.pool_size if using_local?
 
-        configure_shared_adapter!
-        super
+        @client&.size || 0
       end
 
       def timeout
+        return 0 unless connected?
         return 0 if using_memory?
         return Legion::Cache::Local.timeout if using_local?
 
-        configure_shared_adapter!
-        super
+        @timeout || shared_settings[:timeout] || 5
       end
 
       private
 
-      def async_writer
-        Legion::Cache.instance_variable_get(:@async_writer)
-      end
+      attr_reader :async_writer
 
-      def set_internal(key, value, ttl: nil)
-        return Legion::Cache::Memory.set(key, value, ttl: ttl) if using_memory?
-        return Legion::Cache::Local.set(key, value, ttl: ttl) if using_local?
-        return Legion::Cache::Local.set(key, value, ttl: ttl) if failback_to_local?
+      def cache_operation(operation, *, failure:, **, &block)
+        setup unless @initialized || connected?
+        return failure unless connected?
 
-        configure_shared_adapter!
-        set_sync(key, value, ttl: ttl)
-      end
-
-      def delete_internal(key)
-        return Legion::Cache::Memory.delete(key) if using_memory?
-        return Legion::Cache::Local.delete(key) if using_local?
-        return Legion::Cache::Local.delete(key) if failback_to_local?
+        return Legion::Cache::Memory.public_send(operation, *, **, &block) if using_memory?
+        return Legion::Cache::Local.public_send(operation, *, **, &block) if using_local?
 
         configure_shared_adapter!
-        delete_sync(key)
-      end
-
-      def mset_internal(hash, ttl: nil)
-        return hash.each { |key, value| Legion::Cache::Memory.set(key, value, ttl: ttl) } && true if using_memory?
-        return Legion::Cache::Local.mset(hash, ttl: ttl) if using_local?
-        return Legion::Cache::Local.mset(hash, ttl: ttl) if failback_to_local?
-
-        configure_shared_adapter!
-        mset_sync(hash, ttl: ttl)
-      end
-
-      def failback_to_local?
-        return false unless Legion::Cache::Local.connected?
-
-        setting = if defined?(Legion::Settings)
-                    Legion::Settings.dig(:cache, :failback_to_local) != false
-                  else
-                    true
+        user_error = nil
+        guarded = if block
+                    proc do |value|
+                      block.call(value)
+                    rescue StandardError => e
+                      user_error = e
+                      raise
+                    end
                   end
-        setting && (!enabled? || !connected?)
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :cache_failback_check)
-        false
+        begin
+          result = @shared_adapter.instance_method(operation).bind_call(self, *, **, &guarded)
+        rescue StandardError => e
+          raise if e.equal?(user_error) || !cache_connection_error?(e)
+
+          cache_backend_failed(e)
+          handle_exception(e, level: :warn, handled: true, operation: operation)
+          result = failure
+        end
+        return Legion::Cache::Local.public_send(operation, *, **, &block) if using_local? && connected?
+
+        connected? ? result : failure
+      end
+
+      def cache_mark_connected(value)
+        @connected.value = value
+        Legion::Settings[:cache][:connected] = value if defined?(Legion::Settings)
+      end
+
+      def cache_backend_failed(error)
+        return unless cache_connection_error?(error)
+
+        cache_mark_connected(false)
+        select_local_fallback
+        start_reconnector
+      end
+
+      def select_local_fallback
+        available = local_fallback_available?
+        @using_local.value = available
+        cache_mark_connected(available)
+        available
       end
 
       def resolve_ttl(ttl, phi: false)
-        effective = ttl || default_ttl
-        enforce_phi_ttl(effective, phi: phi)
+        enforce_phi_ttl(ttl || shared_settings[:default_ttl] || 3600, phi: phi)
       end
 
-      def default_ttl
-        return 3600 unless defined?(Legion::Settings)
+      def local_cache_get(key)
+        return nil unless local_fallback_available?
 
-        Legion::Settings.dig(:cache, :default_ttl) || 3600
-      rescue StandardError
-        3600
+        Legion::Cache::Local.get(key)
       end
 
-      def setup_local
-        return if Legion::Cache::Local.connected?
+      def local_cache_mget(shared_values, keys)
+        return shared_values unless local_fallback_available?
 
-        Legion::Cache::Local.setup
-      rescue StandardError => e
-        report_exception(e, level: :warn, handled: true, operation: :setup_local)
-      end
+        missing = keys.select { |key| shared_values[key].nil? }
+        return shared_values if missing.empty?
 
-      def setup_shared(**)
-        client(**Legion::Settings[:cache], logger: log, **)
-        @connected.make_true
-        @using_local.make_false
-        Legion::Settings[:cache][:connected] = true
-        driver = Legion::Settings[:cache][:driver] || 'dalli'
-        servers = Array(Legion::Settings[:cache][:servers]).join(', ')
-        log.info "Legion::Cache connected (driver=#{driver}) to #{servers}"
-      rescue StandardError => e
-        report_exception(e, level: :warn, handled: true, operation: :setup_shared, fallback: :local)
-        if Legion::Cache::Local.connected?
-          @using_local.make_true
-          @connected.make_true
-          Legion::Settings[:cache][:connected] = true
-          log.info 'Legion::Cache fell back to Local cache'
-        else
-          @connected.make_false
-          Legion::Settings[:cache][:connected] = false
-          log.error 'Legion::Cache shared and local adapters are unavailable'
+        Legion::Cache::Local.mget(*missing).each do |key, value|
+          shared_values[key] = value unless value.nil?
         end
-        start_reconnector if enabled?
+        shared_values
+      end
+
+      def local_fallback_available?
+        shared_settings[:failback_to_local] != false &&
+          Legion::Cache::Local.enabled? &&
+          Legion::Cache::Local.connected?
+      end
+
+      def setup_shared
+        configure_shared_adapter!
+        settings = Legion::Cache::Settings.connection_options(shared_settings, @connection_options || {})
+        @shared_adapter.instance_method(:client).bind_call(self, **settings, logger: log)
+        @using_local.make_false
+        @using_memory.make_false
+        cache_mark_connected(true)
+        true
+      rescue StandardError => e
+        close_existing_shared_client
+        raise unless cache_connection_error?(e)
+
+        handle_exception(e, level: :warn, handled: true, operation: :setup_shared)
+        result = select_local_fallback
+        start_reconnector
+        result
       end
 
       def reconnect_shared!
-        client(**Legion::Settings[:cache], logger: log)
-        @connected.make_true
-        @using_local.make_false
-        Legion::Settings[:cache][:connected] = true
-        log.info 'Legion::Cache shared reconnected'
-      end
+        return false unless reconnect_enabled?
 
-      def report_exception(exception, level:, handled:, **)
-        handle_exception(exception, level: level, handled: handled, **)
+        close_existing_shared_client
+        configure_shared_adapter!
+        settings = Legion::Cache::Settings.connection_options(shared_settings, @connection_options || {})
+        @shared_adapter.instance_method(:client).bind_call(self, **settings, logger: log)
+        unless reconnect_enabled?
+          close_existing_shared_client
+          select_local_fallback
+          return false
+        end
+
+        @using_local.make_false
+        cache_mark_connected(true)
+        true
+      rescue StandardError => e
+        close_existing_shared_client
+        select_local_fallback
+        raise e
       end
 
       def configure_shared_adapter!(requested_driver = nil)
-        driver = Legion::Cache::Settings.normalize_driver(requested_driver || configured_shared_driver)
-        return if @active_shared_driver == driver
+        driver = Legion::Cache::Settings.normalize_driver(requested_driver || @connection_options&.dig(:driver) || configured_shared_driver)
+        return if @active_shared_driver == driver && @shared_adapter
 
         close_existing_shared_client
-        extend build_shared_adapter(driver)
+        @shared_adapter = build_shared_adapter(driver)
+        extend @shared_adapter
 
         @active_shared_driver = driver
-        log.info "Legion::Cache selected shared adapter=#{driver}"
       end
 
       def configured_shared_driver
-        if defined?(Legion::Settings)
-          Legion::Cache::Settings.normalize_driver(Legion::Settings.dig(:cache, :driver) || Legion::Cache::Settings.driver)
-        else
-          Legion::Cache::Settings.driver
-        end
-      rescue StandardError => e
-        handle_exception(e, level: :warn, handled: true, operation: :cache_configured_shared_driver)
-        'dalli'
+        Legion::Cache::Settings.normalize_driver(shared_settings[:driver] || Legion::Cache::Settings.driver)
       end
 
       def build_shared_adapter(driver)
-        case Legion::Cache::Settings.normalize_driver(driver)
-        when 'redis'
-          Legion::Cache::Redis.dup
-        else
-          Legion::Cache::Memcached.dup
-        end
+        driver == 'redis' ? Legion::Cache::Redis.dup : Legion::Cache::Memcached.dup
       end
 
       def close_existing_shared_client
-        return unless instance_variable_defined?(:@client) && @client
-
-        @client.shutdown(&:close)
+        pool = @client
+        @client = nil
+        pool&.shutdown(&:close)
       rescue StandardError => e
         handle_exception(e, level: :warn, handled: true, operation: :cache_close_existing_shared_client)
-      ensure
-        @client = nil
-        @connected = Concurrent::AtomicBoolean.new(false)
+      end
+
+      def shared_settings
+        return Legion::Cache::Settings.default unless defined?(Legion::Settings)
+
+        Legion::Settings[:cache] || Legion::Cache::Settings.default
       end
 
       def resolved_servers
-        return [] if using_memory?
-
-        Array(Legion::Settings.dig(:cache, :servers))
-      rescue StandardError
-        []
-      end
-
-      def safe_pool_size
-        return 1 if using_memory?
-        return 0 unless connected?
-
-        pool_size
-      rescue StandardError
-        0
-      end
-
-      def safe_pool_available
-        return 1 if using_memory?
-        return 0 unless connected?
-
-        available
-      rescue StandardError
-        0
-      end
-
-      def async_writer_pool_size
-        async_writer.pool_size
-      rescue StandardError
-        0
-      end
-
-      def async_writer_queue_depth
-        async_writer.queue_depth
-      rescue StandardError
-        0
-      end
-
-      def async_writer_processed_count
-        async_writer.processed_count
-      rescue StandardError
-        0
+        using_memory? ? [] : Array(shared_settings[:servers])
       end
 
       def configured_shutdown_timeout
-        return 5 unless defined?(Legion::Settings)
-
-        Legion::Settings.dig(:cache, :async, :shutdown_timeout) || 5
-      rescue StandardError
-        5
+        shared_settings.dig(:async, :shutdown_timeout) || 5
       end
 
-      def async_writer_failed_count
-        async_writer.failed_count
-      rescue StandardError
-        0
-      end
-
-      def reconnector_attempts
-        @reconnector&.attempts || 0
+      def reconnect_enabled?
+        enabled? && shared_settings.dig(:reconnect, :enabled) != false
       end
 
       def start_reconnector
-        return unless enabled?
+        return unless reconnect_enabled?
+        return if @reconnector&.running?
 
-        stop_reconnector
         @reconnector = Legion::Cache::Reconnector.new(
-          tier:          :shared,
-          connect_block: -> { reconnect_shared! },
-          enabled_block: -> { enabled? },
-          settings_key:  :cache
+          tier: :shared, connect_block: -> { reconnect_shared! },
+          enabled_block: -> { reconnect_enabled? }, settings_key: :cache
         )
         @reconnector.start
-        log.info 'Legion::Cache started background reconnector for shared tier'
       end
 
       def stop_reconnector
         @reconnector&.stop
         @reconnector = nil
-      end
-
-      def uptime_seconds
-        return 0 unless @setup_at
-
-        (Time.now - @setup_at).to_i
-      rescue StandardError
-        0
       end
     end
   end

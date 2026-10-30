@@ -2,60 +2,44 @@
 
 require 'spec_helper'
 require 'legion/cache/redis'
+require 'redis-clustering'
 
-RSpec.describe 'Legion::Cache::Redis TLS' do
-  let(:redis_mod) { Legion::Cache::Redis.dup }
+RSpec.describe 'Redis TLS configuration' do
+  let(:cache) { Object.new.extend(Legion::Cache::Redis) }
 
   before do
     stub_const('Legion::Crypt::TLS', Module.new)
+    cache.instance_variable_set(:@cache_settings, { tls: { enabled: true } })
+    allow(Legion::Crypt::TLS).to receive(:resolve).and_return(enabled: true, verify: :peer)
   end
 
-  after { redis_mod.instance_variable_set(:@client, nil) }
+  it 'enables verified TLS on standalone connections' do
+    client = cache.build_redis_client(server: 'secure.example:6380')
+    config = client._client.config
+    expect(config.ssl?).to be(true)
+    expect(config.ssl_params[:verify_mode]).to eq(OpenSSL::SSL::VERIFY_PEER)
+  ensure
+    client&.close
+  end
 
-  describe 'TLS options passed to Redis.new' do
-    before do
-      allow(Legion::Cache::Settings).to receive(:resolve_servers).and_return(['127.0.0.1:6379'])
+  it 'applies TLS and fixed hostname to cluster-discovered node configurations' do
+    client = cache.build_redis_client(cluster: ['redis://node.example:6380'], fixed_hostname: 'secure.example')
+    config = client._client.config.client_config_for_node('discovered.example:6381')
+    expect(config[:ssl]).to be(true)
+    expect(config[:ssl_params][:verify_mode]).to eq(OpenSSL::SSL::VERIFY_PEER)
+    expect(config[:host]).to eq('secure.example')
+  ensure
+    client&.close
+  end
+
+  it 'does not inherit shared TLS configuration when Local explicitly disables it' do
+    cache.instance_variable_set(:@cache_settings, { tls: { enabled: false } })
+    allow(Legion::Crypt::TLS).to receive(:resolve) do |settings, **|
+      { enabled: settings[:enabled], verify: :peer }
     end
-
-    it 'passes ssl: true when TLS is enabled' do
-      allow(Legion::Crypt::TLS).to receive(:resolve).and_return(
-        { enabled: true, verify: :peer, ca: '/ca.crt', cert: nil, key: nil, auto_detected: false }
-      )
-      expect(Redis).to receive(:new).with(hash_including(ssl: true)).and_return(double(connected?: true))
-      allow(ConnectionPool).to receive(:new).and_yield
-
-      redis_mod.client
-    end
-
-    it 'passes ssl_params with verify mode when TLS is enabled' do
-      allow(Legion::Crypt::TLS).to receive(:resolve).and_return(
-        { enabled: true, verify: :peer, ca: '/ca.crt', cert: nil, key: nil, auto_detected: false }
-      )
-      expect(Redis).to receive(:new) do |opts|
-        expect(opts[:ssl]).to be true
-        expect(opts[:ssl_params][:ca_file]).to eq '/ca.crt'
-      end.and_return(double(connected?: true))
-      allow(ConnectionPool).to receive(:new).and_yield
-
-      redis_mod.client
-    end
-
-    it 'skips TLS when disabled' do
-      allow(Legion::Crypt::TLS).to receive(:resolve).and_return(
-        { enabled: false, verify: :peer, ca: nil, cert: nil, key: nil, auto_detected: false }
-      )
-      expect(Redis).to receive(:new).with(hash_not_including(ssl: true)).and_return(double(connected?: true))
-      allow(ConnectionPool).to receive(:new).and_yield
-
-      redis_mod.client
-    end
-
-    it 'skips TLS when Legion::Crypt::TLS is not defined' do
-      hide_const('Legion::Crypt::TLS')
-      expect(Redis).to receive(:new).with(hash_not_including(ssl: true)).and_return(double(connected?: true))
-      allow(ConnectionPool).to receive(:new).and_yield
-
-      redis_mod.client
-    end
+    client = cache.build_redis_client(server: 'plain.example:6379')
+    expect(client._client.config.ssl?).to be(false)
+  ensure
+    client&.close
   end
 end

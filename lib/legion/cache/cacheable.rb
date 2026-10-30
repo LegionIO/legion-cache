@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
 require 'digest'
+require 'securerandom'
 require 'legion/logging/helper'
+require 'legion/cache/memory'
 
 module Legion
   module Cache
@@ -10,8 +12,11 @@ module Legion
 
       LOCAL_CACHE_MISS = Object.new
 
+      @memory_store = Legion::Cache::ExpiringStore.new
+
       def self.extended(base)
         base.instance_variable_set(:@cached_methods, {})
+        base.instance_variable_set(:@cache_identity, "Anonymous:#{SecureRandom.uuid}")
       end
 
       def cached_methods
@@ -19,10 +24,10 @@ module Legion
       end
 
       def cache_method(method_name, ttl:, scope: :local, exclude_from_key: [])
-        exclude_from_key |= %i[token bypass_local_method_cache]
+        exclude_from_key = (exclude_from_key - [:token, 'token']) | [:bypass_local_method_cache]
         cached_methods[method_name] = { ttl: ttl, scope: scope, exclude_from_key: exclude_from_key }
 
-        mod_name = name || 'Anonymous'
+        mod_name = name || @cache_identity
         config = cached_methods[method_name]
 
         wrapper = Module.new do
@@ -51,39 +56,20 @@ module Legion
       end
 
       def self.build_cache_key(mod_name, method_name, exclude:, **kwargs)
-        filtered = kwargs.except(*exclude)
-        args_hash = Digest::MD5.hexdigest(filtered.sort.to_s)
+        filtered = kwargs.except(*(exclude - [:token, 'token']))
+        args_hash = Digest::SHA256.hexdigest(filtered.sort.to_s)
         "#{mod_name}.#{method_name}.#{args_hash}"
       end
 
       def self.cache_read(key, scope:)
-        case scope
-        when :global
-          return Legion::Cache.get(key) if global_cache_available?
-
-          memory_read(key)
-        else
-          result = local_cache_read(key)
-          result.equal?(LOCAL_CACHE_MISS) ? memory_read(key) : result
-        end
+        result = scope == :global ? global_cache_read(key) : local_cache_read(key)
+        result.equal?(LOCAL_CACHE_MISS) ? memory_read(key) : result
       end
 
       def self.cache_write(key, value, ttl:, scope:)
-        case scope
-        when :global
-          if global_cache_available?
-            Legion::Cache.set(key, value, ttl: ttl, async: false)
-          else
-            memory_write(key, value, ttl)
-          end
-        else
-          if local_cache_available?
-            result = local_cache_write(key, value, ttl: ttl)
-            memory_write(key, value, ttl) unless result
-          else
-            memory_write(key, value, ttl)
-          end
-        end
+        result = scope == :global ? global_cache_write(key, value, ttl: ttl) : local_cache_write(key, value, ttl: ttl)
+        result ||= local_cache_write(key, value, ttl: ttl) if scope == :global
+        memory_write(key, value, ttl) unless result
       end
 
       def self.global_cache_available?
@@ -92,6 +78,25 @@ module Legion
 
       def self.local_cache_available?
         defined?(Legion::Cache::Local) && Legion::Cache::Local.respond_to?(:connected?) && Legion::Cache::Local.connected?
+      end
+
+      def self.global_cache_read(key)
+        result = Legion::Cache.get(key) if global_cache_available?
+        return result unless result.nil?
+
+        local_cache_read(key)
+      rescue StandardError => e
+        handle_exception(e, level: :warn, operation: :global_cache_read, key: key)
+        local_cache_read(key)
+      end
+
+      def self.global_cache_write(key, value, ttl:)
+        return unless global_cache_available?
+
+        Legion::Cache.set(key, value, ttl: ttl, async: false)
+      rescue StandardError => e
+        handle_exception(e, level: :warn, operation: :global_cache_write, key: key, ttl: ttl)
+        nil
       end
 
       def self.local_cache_read(key)
@@ -115,23 +120,19 @@ module Legion
 
       # In-memory fallback store (class-level, process-wide)
       def self.memory_store
-        @memory_store ||= {}
+        @memory_store
       end
 
       def self.memory_read(key)
-        entry = memory_store[key]
-        return nil unless entry
-        return nil if Time.now.utc > entry[:expires_at]
-
-        entry[:value]
+        memory_store.get(key)
       end
 
       def self.memory_write(key, value, ttl)
-        memory_store[key] = { value: value, expires_at: Time.now.utc + ttl }
+        memory_store.set(key, value, ttl: ttl)
       end
 
       def self.memory_clear!
-        @memory_store = {}
+        memory_store.clear
       end
     end
   end

@@ -3,44 +3,51 @@
 require 'spec_helper'
 require 'legion/cache'
 
-RSpec.describe 'async write integration' do
+RSpec.describe 'facade asynchronous admission' do
   before do
+    Legion::Cache.shutdown
+    @mode = ENV.fetch('LEGION_MODE', nil)
+    @async_settings = Legion::Settings[:cache][:async]
     ENV['LEGION_MODE'] = 'lite'
+    Legion::Settings[:cache][:enabled] = true
+    Legion::Settings[:cache][:async] = { pool_size: 1, queue_size: 1, shutdown_timeout: 2 }
     Legion::Cache.setup
+    @entered = Queue.new
+    @release = Queue.new
   end
 
   after do
+    @release << true
     Legion::Cache.shutdown
-    ENV.delete('LEGION_MODE')
+    Legion::Settings[:cache][:async] = @async_settings
+    @mode ? ENV['LEGION_MODE'] = @mode : ENV.delete('LEGION_MODE')
   end
 
-  it 'set with async: true returns true immediately' do
-    expect(Legion::Cache.set('async_key', 'val', async: true)).to be(true)
+  it 'reports full queues without executing rejected writes in the caller' do
+    allow(Legion::Cache::Memory).to receive(:set_sync).and_wrap_original do |method, key, value, **options|
+      if key == 'blocked'
+        @entered << true
+        @release.pop
+      end
+      method.call(key, value, **options)
+    end
+    expect(Legion::Cache.set('blocked', 'first')).to be(true)
+    @entered.pop(timeout: 2)
+    expect(Legion::Cache.set('queued', 'second')).to be(true)
+    expect(Legion::Cache.mset({ 'rejected' => 'third' })).to be(false)
+    expect(Legion::Cache.delete('queued')).to be(false)
+    expect(Legion::Cache.get('rejected')).to be_nil
+    @release << true
+    Legion::Cache.instance_variable_get(:@async_writer).stop
+    expect(Legion::Cache.get('queued')).to eq('second')
+    expect(Legion::Cache.get('rejected')).to be_nil
   end
 
-  it 'set with async: false writes synchronously' do
-    Legion::Cache.set('sync_key', 'val', async: false)
-    expect(Legion::Cache.get('sync_key')).to eq('val')
-  end
-
-  it 'set with async: true eventually writes the value' do
-    Legion::Cache.set('eventual', 'val', async: true)
-    sleep 0.2
-    expect(Legion::Cache.get('eventual')).to eq('val')
-  end
-
-  it 'drains async writer before closing pool on shutdown' do
-    # Write async, then immediately shutdown — drain should complete the write
-    Legion::Cache.set('drain_test', 'value', async: true)
-    # Small sleep to let async writer pick up the job
-    sleep 0.1
-    # Verify value was written (drain ensures this before pool close)
-    expect(Legion::Cache.get('drain_test')).to eq('value')
-  end
-
-  it 'stats reports async pool size' do
-    stats = Legion::Cache.stats
-    expect(stats[:async_pool_size]).to be_a(Integer)
-    expect(stats[:async_pool_size]).to be > 0
+  it 'rejects stopped-writer admission while explicit synchronous writes still work' do
+    Legion::Cache.instance_variable_get(:@async_writer).stop
+    expect(Legion::Cache.set('key', 'rejected')).to be(false)
+    expect(Legion::Cache.get('key')).to be_nil
+    expect(Legion::Cache.set('key', 'visible', async: false)).to be(true)
+    expect(Legion::Cache.get('key')).to eq('visible')
   end
 end

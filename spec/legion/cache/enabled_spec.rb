@@ -3,52 +3,39 @@
 require 'spec_helper'
 require 'legion/cache'
 
-RSpec.describe 'enabled? and connected?' do
+RSpec.describe 'disabled cache operations' do
   before do
-    Legion::Cache.instance_variable_set(:@connected, Concurrent::AtomicBoolean.new(false))
-    Legion::Cache.instance_variable_set(:@using_memory, Concurrent::AtomicBoolean.new(false))
-    Legion::Cache.instance_variable_set(:@using_local, Concurrent::AtomicBoolean.new(false))
-    Legion::Cache::Local.reset!
+    Legion::Cache.shutdown
+    @cache_enabled = Legion::Settings[:cache][:enabled]
+    @local_enabled = Legion::Settings[:cache_local][:enabled]
+    Legion::Settings[:cache][:enabled] = false
+    Legion::Settings[:cache_local][:enabled] = false
   end
 
   after do
-    Legion::Settings[:cache][:enabled] = true
+    Legion::Settings[:cache][:enabled] = @cache_enabled
+    Legion::Settings[:cache_local][:enabled] = @local_enabled
   end
 
-  describe 'Legion::Cache.enabled?' do
-    it 'returns true when settings enabled is true' do
-      Legion::Settings[:cache][:enabled] = true
-      expect(Legion::Cache.enabled?).to be(true)
-    end
-
-    it 'returns false when settings enabled is false' do
-      Legion::Settings[:cache][:enabled] = false
-      expect(Legion::Cache.enabled?).to be(false)
-    end
-  end
-
-  describe 'Legion::Cache::Local.enabled?' do
-    it 'reads from cache_local settings' do
-      Legion::Settings[:cache_local] ||= {}
-      Legion::Settings[:cache_local][:enabled] = false
-      expect(Legion::Cache::Local.enabled?).to be(false)
-      Legion::Settings[:cache_local][:enabled] = true
-    end
-  end
-
-  describe 'setup respects enabled?' do
-    it 'does not connect when disabled' do
-      Legion::Settings[:cache][:enabled] = false
-      expect(Legion::Cache::Local).not_to receive(:setup)
-      Legion::Cache.setup
-      expect(Legion::Cache.connected?).to be(false)
-      Legion::Settings[:cache][:enabled] = true
-    end
-  end
-
-  describe 'Legion::Cache::Memory enabled?' do
-    it 'always returns true' do
-      expect(Legion::Cache::Memory).to respond_to(:connected?)
+  [Legion::Cache, Legion::Cache::Local].each do |cache|
+    it "does not connect, admit mutations or evaluate cas for disabled #{cache}" do
+      expect(cache.setup).to be(false)
+      expect(cache.client).to be_nil
+      expect(cache.restart).to be(false)
+      expect(cache.connected?).to be(false)
+      expect(cache.get('key')).to be_nil
+      expect(cache.mget('key')).to eq({})
+      expect(cache.set('key', 'value')).to be(false)
+      expect(cache.set_sync('key', 'value')).to be(false)
+      expect(cache.set_nx('key', 'value')).to be(false)
+      expect(cache.mset({ 'key' => 'value' })).to be(false)
+      expect(cache.mset_sync({ 'key' => 'value' })).to be(false)
+      expect(cache.delete('key')).to be(false)
+      expect(cache.delete_sync('key')).to be(false)
+      expect(cache.flush).to be(false)
+      expect(cache.cas('key') { raise 'must not run' }).to be(false)
+      expect(cache.fetch('key') { 'computed' }).to eq('computed') # rubocop:disable Style/RedundantFetchBlock
+      expect(cache.get('key')).to be_nil
     end
   end
 end
