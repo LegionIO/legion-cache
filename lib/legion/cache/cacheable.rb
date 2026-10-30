@@ -62,22 +62,13 @@ module Legion
       end
 
       def self.cache_read(key, scope:)
-        result = case scope
-                 when :global
-                   global_cache_read(key)
-                 else
-                   local_cache_read(key)
-                 end
+        result = scope == :global ? global_cache_read(key) : local_cache_read(key)
         result.equal?(LOCAL_CACHE_MISS) ? memory_read(key) : result
       end
 
       def self.cache_write(key, value, ttl:, scope:)
-        result = case scope
-                 when :global
-                   global_cache_write(key, value, ttl: ttl)
-                 else
-                   local_cache_write(key, value, ttl: ttl)
-                 end
+        result = scope == :global ? global_cache_write(key, value, ttl: ttl) : local_cache_write(key, value, ttl: ttl)
+        result ||= local_cache_write(key, value, ttl: ttl) if scope == :global
         memory_write(key, value, ttl) unless result
       end
 
@@ -90,13 +81,13 @@ module Legion
       end
 
       def self.global_cache_read(key)
-        return LOCAL_CACHE_MISS unless global_cache_available?
+        result = Legion::Cache.get(key) if global_cache_available?
+        return result unless result.nil?
 
-        result = Legion::Cache.get(key)
-        result.nil? ? LOCAL_CACHE_MISS : result
+        local_cache_read(key)
       rescue StandardError => e
         handle_exception(e, level: :warn, operation: :global_cache_read, key: key)
-        LOCAL_CACHE_MISS
+        local_cache_read(key)
       end
 
       def self.global_cache_write(key, value, ttl:)

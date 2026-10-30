@@ -32,10 +32,10 @@ module Legion
       end
 
       def connected?
-        return false unless enabled? && @connected.value
+        return Legion::Cache::Memory.connected? if using_memory?
         return Legion::Cache::Local.enabled? && Legion::Cache::Local.connected? if using_local?
 
-        true
+        enabled? && @connected.value
       end
 
       def driver_name
@@ -56,14 +56,13 @@ module Legion
       end
 
       def setup(**opts)
-        return false unless enabled?
         return true if connected?
 
         @initialized = true
         @connection_options = Legion::Cache::Settings.connection_options(@connection_options || {}, opts)
         @setup_at = Time.now
-        async_writer.start
         if ENV['LEGION_MODE'] == 'lite'
+          async_writer.start
           Legion::Cache::Memory.setup
           @using_memory.make_true
           @using_local.make_false
@@ -72,6 +71,13 @@ module Legion
         end
 
         Legion::Cache::Local.setup
+        unless enabled?
+          result = select_local_fallback
+          async_writer.start if result
+          return result
+        end
+
+        async_writer.start
         setup_shared
       end
 
@@ -104,8 +110,6 @@ module Legion
       end
 
       def client(**)
-        return nil unless enabled?
-
         setup(**) unless @initialized
         return Legion::Cache::Memory.client if using_memory?
         return Legion::Cache::Local.client if using_local?
@@ -115,7 +119,10 @@ module Legion
       end
 
       def get(key)
-        cache_operation(:get, key, failure: nil)
+        result = cache_operation(:get, key, failure: nil)
+        return result unless result.nil?
+
+        local_cache_get(key)
       end
 
       def phi_max_ttl
@@ -135,8 +142,6 @@ module Legion
       end
 
       def set(key, value, ttl: nil, async: true, phi: false)
-        return false unless enabled?
-
         setup unless @initialized || connected?
         return false unless connected?
 
@@ -149,20 +154,14 @@ module Legion
       end
 
       def set_nx(key, value, ttl: nil, phi: false)
-        return false unless enabled?
-
         cache_operation(:set_nx, key, value, ttl: resolve_ttl(ttl, phi: phi), failure: false)
       end
 
       def set_sync(key, value, ttl: nil, phi: false, **)
-        return false unless enabled?
-
         cache_operation(:set_sync, key, value, ttl: resolve_ttl(ttl, phi: phi), failure: false)
       end
 
       def cas(key, ttl: nil, phi: false, &)
-        return false unless enabled?
-
         cache_operation(:cas, key, ttl: resolve_ttl(ttl, phi: phi), failure: false, &)
       end
 
@@ -177,8 +176,6 @@ module Legion
       end
 
       def delete(key, async: true)
-        return false unless enabled?
-
         setup unless @initialized || connected?
         return false unless connected?
 
@@ -201,11 +198,13 @@ module Legion
         keys = keys.flatten
         return {} if keys.empty?
 
-        cache_operation(:mget, *keys, failure: {})
+        result = cache_operation(:mget, *keys, failure: {})
+        return result if using_memory? || using_local?
+
+        local_cache_mget(result, keys)
       end
 
       def mset(hash, ttl: nil, async: true, phi: false)
-        return false unless enabled?
         return mset_sync(hash, ttl: ttl, phi: phi) unless async
 
         setup unless @initialized || connected?
@@ -221,7 +220,6 @@ module Legion
       end
 
       def mset_sync(hash, ttl: nil, phi: false, **)
-        return false unless enabled?
         return true if hash.empty?
 
         cache_operation(:mset_sync, hash, ttl: resolve_ttl(ttl, phi: phi), failure: false)
@@ -269,8 +267,6 @@ module Legion
       attr_reader :async_writer
 
       def cache_operation(operation, *, failure:, **, &block)
-        return failure unless enabled?
-
         setup unless @initialized || connected?
         return failure unless connected?
 
@@ -315,8 +311,7 @@ module Legion
       end
 
       def select_local_fallback
-        available = enabled? && shared_settings[:failback_to_local] != false &&
-                    Legion::Cache::Local.enabled? && Legion::Cache::Local.connected?
+        available = local_fallback_available?
         @using_local.value = available
         cache_mark_connected(available)
         available
@@ -324,6 +319,30 @@ module Legion
 
       def resolve_ttl(ttl, phi: false)
         enforce_phi_ttl(ttl || shared_settings[:default_ttl] || 3600, phi: phi)
+      end
+
+      def local_cache_get(key)
+        return nil unless local_fallback_available?
+
+        Legion::Cache::Local.get(key)
+      end
+
+      def local_cache_mget(shared_values, keys)
+        return shared_values unless local_fallback_available?
+
+        missing = keys.select { |key| shared_values[key].nil? }
+        return shared_values if missing.empty?
+
+        Legion::Cache::Local.mget(*missing).each do |key, value|
+          shared_values[key] = value unless value.nil?
+        end
+        shared_values
+      end
+
+      def local_fallback_available?
+        shared_settings[:failback_to_local] != false &&
+          Legion::Cache::Local.enabled? &&
+          Legion::Cache::Local.connected?
       end
 
       def setup_shared

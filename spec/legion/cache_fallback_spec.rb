@@ -31,6 +31,12 @@ RSpec.describe 'cache backend transitions' do
         state[:values][key] = value
         true
       end
+      define_method(:mget) do |*keys|
+        raise state[:error] if state[:error]
+        raise IOError, 'backend unavailable' unless state[:available]
+
+        keys.flatten.to_h { |key| [key, state[:values][key]] }
+      end
       define_method(:delete_sync) do |key|
         raise IOError, 'backend unavailable' unless state[:available]
 
@@ -90,6 +96,39 @@ RSpec.describe 'cache backend transitions' do
 
     expect(Legion::Cache.get('key')).to eq('local value')
     expect(Legion::Cache.connected?).to be(true)
+  end
+
+  it 'reads a shared miss from Local without changing the active shared tier' do
+    Legion::Cache.setup
+    Legion::Cache::Local.set_sync('local', 'local value')
+    Legion::Cache::Local.set_sync('false', false)
+
+    expect(Legion::Cache.get('local')).to eq('local value')
+    expect(Legion::Cache.get('false')).to be(false)
+    expect(Legion::Cache.using_local?).to be(false)
+  end
+
+  it 'fills only missing shared batch values from Local' do
+    backend[:values]['shared'] = 'shared value'
+    Legion::Cache.setup
+    Legion::Cache::Local.set_sync('local', 'local value')
+    Legion::Cache::Local.set_sync('false', false)
+
+    expect(Legion::Cache.mget('shared', 'local', 'false', 'missing')).to eq(
+      'shared' => 'shared value', 'local' => 'local value', 'false' => false, 'missing' => nil
+    )
+    expect(Legion::Cache.using_local?).to be(false)
+  end
+
+  it 'uses healthy Local without connecting shared when shared cache is disabled' do
+    Legion::Settings[:cache][:enabled] = false
+
+    expect(Legion::Cache.setup).to be(true)
+    expect(Legion::Cache.set_sync('key', 'local value')).to be(true)
+    expect(Legion::Cache.get('key')).to eq('local value')
+    expect(Legion::Cache.client).to eq(Legion::Cache::Local.client)
+    expect(Legion::Cache.using_local?).to be(true)
+    expect(backend[:connections]).to be_empty
   end
 
   it 'fails closed for every write when both tiers are unavailable' do

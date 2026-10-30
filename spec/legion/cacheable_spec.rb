@@ -146,11 +146,20 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
     context 'when global cache is not available' do
       before do
         allow(described_class).to receive(:global_cache_available?).and_return(false)
+        allow(described_class).to receive(:local_cache_available?).and_return(false)
       end
 
       it 'falls back to memory store' do
         described_class.cache_write('global.key', 'value', ttl: 30, scope: :global)
         expect(described_class.cache_read('global.key', scope: :global)).to eq('value')
+      end
+
+      it 'checks Local before memory when global cache is unavailable' do
+        allow(described_class).to receive(:local_cache_available?).and_return(true)
+        allow(Legion::Cache::Local).to receive(:get).with('global.key').and_return('local value')
+        described_class.memory_write('global.key', 'memory value', 60)
+
+        expect(described_class.cache_read('global.key', scope: :global)).to eq('local value')
       end
     end
 
@@ -165,12 +174,31 @@ RSpec.describe Legion::Cache::Cacheable, 'cache_read and cache_write' do
         expect(described_class.cache_read('global.hit', scope: :global)).to eq('remote')
       end
 
+      it 'checks Local after a global cache miss and preserves false' do
+        allow(Legion::Cache).to receive(:get).with('global.local').and_return(nil)
+        allow(described_class).to receive(:local_cache_available?).and_return(true)
+        allow(Legion::Cache::Local).to receive(:get).with('global.local').and_return(false)
+        described_class.memory_write('global.local', 'memory value', 60)
+
+        expect(described_class.cache_read('global.local', scope: :global)).to be(false)
+      end
+
       it 'falls back to memory when global writes are rejected' do
         allow(Legion::Cache).to receive(:set).and_return(false)
+        allow(described_class).to receive(:local_cache_available?).and_return(false)
         allow(Legion::Cache).to receive(:get).with('global.w').and_return(nil)
         described_class.cache_write('global.w', 'data', ttl: 120, scope: :global)
 
         expect(described_class.cache_read('global.w', scope: :global)).to eq('data')
+      end
+
+      it 'writes through Local before using memory when global writes are rejected' do
+        allow(Legion::Cache).to receive(:set).and_return(false)
+        allow(described_class).to receive(:local_cache_available?).and_return(true)
+        expect(Legion::Cache::Local).to receive(:set).with('global.w', 'data', ttl: 120, async: false).and_return(true)
+
+        described_class.cache_write('global.w', 'data', ttl: 120, scope: :global)
+        expect(described_class.memory_read('global.w')).to be_nil
       end
     end
   end

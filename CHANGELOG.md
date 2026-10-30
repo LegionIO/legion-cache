@@ -21,6 +21,7 @@
 - Construct Redis Cluster with the supported clustering client; forward TLS and hostname verification to discovered nodes.
 - Apply Redis namespaces to scalar, batch, hash, and sorted-set operations; namespace-only flush reports partial failures without global fallback.
 - Correct README keyword-TTL examples and document admission, ordering, fallback, expiry, and namespace-upgrade behavior.
+- Restore the intentional shared → Local → in-process fallback order for global misses, rejected writes, disabled shared cache, and missing batch entries.
 
 ### Changed
 - Require Redis/redis-clustering versions >= 5.4.1 and < 7.0; keep Dalli below 5.0 to retain binary-protocol SASL authentication.

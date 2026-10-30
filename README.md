@@ -77,12 +77,17 @@ them. `Legion::Cache::Memory.setup(max_entries: 1000)` changes Memory's capacity
 ## Two-Tier Cache
 
 Legion::Cache supports a shared remote cache and an independent Local cache.
-Setup performs a backend health check. If shared setup or a later operation
-fails with a connection error, the operation is retried against healthy Local
-when `failback_to_local` is enabled. Background reconnection returns traffic to
-shared only after a successful health check. Setting `reconnect.enabled` to
-`false` disables that worker. Setting `cache.enabled` to `false` disables the
-shared facade entirely: no lazy connection and no automatic Local fallback.
+Setup performs a backend health check. Every shared miss checks healthy Local
+before reporting a miss; `mget` checks Local only for missing keys. If shared
+setup or a later operation fails with a connection error, the operation is
+retried against Local when `failback_to_local` is enabled. Background
+reconnection returns traffic to shared only after a successful health check.
+Setting `reconnect.enabled` to `false` disables that worker.
+
+Setting `cache.enabled` to `false` disables shared connectivity but leaves a
+healthy, enabled Local cache available through the facade. Set
+`cache_local.enabled` to `false`, or `failback_to_local` to `false`, to prevent
+that fallback.
 
 ```ruby
 # Shared cache connects to remote cluster; Local connects to localhost
@@ -268,10 +273,11 @@ Options: `ttl:` (seconds), `scope:` (`:local` or `:global`), and
 contribute to the SHA-256 key digest, even if listed for exclusion; plaintext
 tokens never appear in cache keys. Anonymous modules have distinct identities.
 
-Both scopes fall back to bounded in-process storage when the selected backend
-is unavailable or rejects a write. Cache failures do not replace a successfully
-computed method result with an exception; application exceptions still
-propagate. Ordinary zero TTL means no expiration, subject to capacity eviction.
+Global method-cache reads and writes use the same order: shared cache, then
+healthy Local, then bounded in-process storage. Cache failures do not replace a
+successfully computed method result with an exception; application exceptions
+still propagate. Ordinary zero TTL means no expiration, subject to capacity
+eviction.
 
 ## Pool API
 
